@@ -1,0 +1,68 @@
+{
+  "targets": {
+    "optics": {}
+  },
+  "passes": [
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "snapshot:post/live_optics",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "minecraft:main",
+          "bilinear": true
+        },
+        {
+          "sampler_name": "MainDepth",
+          "target": "minecraft:main",
+          "use_depth_buffer": true
+        }
+      ],
+      "output": "optics",
+      "uniforms": {
+        "SnapshotOptics": [
+          {
+            "name": "Lens",
+            "type": "vec4",
+            "value": [18.0, 50.0, 1.8, 8.0]
+          },
+          {
+            "name": "DepthConfig",
+            "type": "vec4",
+            "value": [0.05, 1024.0, 7.0, 0.5]
+          },
+          {
+            "name": "ImageConfig",
+            "type": "vec4",
+            "value": [0.0, 0.0, 1.0, 1.0]
+          },
+          {
+            "name": "Effects",
+            "type": "vec4",
+            "value": [0.0, 0.0, 0.0, 0.1]
+          }
+        ]
+      }
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "minecraft:post/blit",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "optics"
+        }
+      ],
+      "output": "minecraft:main",
+      "uniforms": {
+        "BlitConfig": [
+          {
+            "name": "ColorModulate",
+            "type": "vec4",
+            "value": [1.0, 1.0, 1.0, 1.0]
+          }
+        ]
+      }
+    }
+  ]
+}

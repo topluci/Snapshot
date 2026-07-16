@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "package": "com.luci.snapshot.mixin.client",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "CameraMixin",
+    "GameRendererAccessor",
+    "GameRendererMixin",
+    "ItemInHandRendererMixin",
+    "LevelEnvironmentPreviewMixin",
+    "PostChainAccessor",
+    "PostPassAccessor",
+    "SoundEngineMixin",
+    "MouseHandlerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

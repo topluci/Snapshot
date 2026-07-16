@@ -1,0 +1,145 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.15.5'
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+    maven { url = uri('https://maven.fabricmc.net') }
+    maven {
+        name = "Terraformers"
+        url = "https://maven.terraformersmc.com/"
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
+    testImplementation "net.fabricmc:fabric-loader-junit:${project.loader_version}"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ["-Xlint:deprecation"]
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.withType(Copy).configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+def snapshotVersion = project.version.toString()
+
+processResources {
+    inputs.property "version", snapshotVersion
+
+    filesMatching("fabric.mod.json") {
+        expand "version": snapshotVersion
+    }
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat = "full"
+    }
+}
+
+def snapshotSmokeRequested = gradle.startParameter.taskNames.any {
+    it.tokenize(':').last() == 'snapshotSmokeTest'
+}
+def snapshotSmokeCase = providers.gradleProperty("snapshotSmokeCase").orElse("suite")
+def snapshotSmokeWorld = providers.gradleProperty("snapshotSmokeWorld").orElse("New World")
+def snapshotSmokeExpectedRenderer = providers.gradleProperty("snapshotSmokeExpectedRenderer").orElse("")
+def snapshotSmokeExpectedShader = providers.gradleProperty("snapshotSmokeExpectedShader").orElse("")
+def snapshotSmokeServer = providers.gradleProperty("snapshotSmokeServer").orElse("127.0.0.1:25565")
+def snapshotSmokeExpectedEnvironment = providers.gradleProperty("snapshotSmokeExpectedEnvironment").orElse("")
+def snapshotSmokeReport = layout.projectDirectory.file(
+    "run/snapshot-test-results/${snapshotSmokeCase.get()}.json"
+)
+
+if (snapshotSmokeRequested) {
+    tasks.named("runClient") {
+        environment "SNAPSHOT_AUTOTEST", "true"
+        environment "SNAPSHOT_AUTOTEST_CASE", snapshotSmokeCase.get()
+        environment "SNAPSHOT_AUTOTEST_EXPECT_RENDERER", snapshotSmokeExpectedRenderer.get()
+        environment "SNAPSHOT_AUTOTEST_EXPECT_SHADER", snapshotSmokeExpectedShader.get()
+        environment "SNAPSHOT_AUTOTEST_EXPECT_ENVIRONMENT", snapshotSmokeExpectedEnvironment.get()
+        if (snapshotSmokeCase.get().startsWith("multiplayer")) {
+            args "--quickPlayMultiplayer", snapshotSmokeServer.get()
+        } else {
+            args "--quickPlaySingleplayer", snapshotSmokeWorld.get()
+        }
+        doFirst {
+            delete snapshotSmokeReport
+        }
+    }
+}
+
+loom {
+    runs {
+        snapshotTestServer {
+            server()
+            name = "Snapshot Test Server"
+            runDir = "run/server-test"
+        }
+    }
+}
+
+tasks.register("snapshotSmokeTest") {
+    group = "verification"
+    description = "Runs an automated Snapshot client scenario and verifies its result report."
+    dependsOn "runClient"
+
+    doLast {
+        File report = snapshotSmokeReport.asFile
+        if (!report.isFile()) {
+            throw new GradleException("Snapshot smoke test did not produce ${report}.")
+        }
+        def result = new groovy.json.JsonSlurper().parse(report)
+        if (result.status != "passed") {
+            throw new GradleException("Snapshot smoke test failed: ${result.message}")
+        }
+        println "Snapshot smoke test '${snapshotSmokeCase.get()}' passed: ${result.message}"
+    }
+}
+
+jar {
+    inputs.property "version", project.version
+    from("LICENSE")
+    from("README.md")
+    from("NOTICE.md")
+    from("FONT_LICENSE.md")
+    manifest {
+        attributes([
+            "Implementation-Title": project.archives_base_name,
+            "Implementation-Version": project.version
+        ])
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+}

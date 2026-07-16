@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:paper",
+    "minecraft:glow_ink_sac"
+  ],
+  "result": {
+    "id": "snapshot:photographic_paper",
+    "count": 4
+  }
+}

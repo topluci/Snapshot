@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "snapshot",
+  "version": "${version}",
+  "name": "Snapshot",
+  "description": "A heavy-realism photography mod with DSLR controls, live viewfinder optics, PNG export, and in-game photographs.",
+  "authors": [
+    "luci"
+  ],
+  "license": "LicenseRef-All-Rights-Reserved",
+  "icon": "assets/snapshot/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.luci.snapshot.SnapshotInit"
+    ],
+    "client": [
+      "com.luci.snapshot.client.SnapshotClientInit"
+    ],
+    "modmenu": [
+      "com.luci.snapshot.compat.modmenu.SnapshotModMenuIntegration"
+    ]
+  },
+  "mixins": [
+    "snapshot.mixins.json",
+    {
+      "config": "snapshot.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "minecraft": "26.2",
+    "java": ">=25",
+    "fabricloader": ">=0.19.2",
+    "fabric-api": ">=0.152.2+26.2"
+  },
+  "suggests": {
+    "modmenu": "*",
+    "sodium": "*",
+    "iris": "*",
+    "image2map": "*"
+  }
+}
