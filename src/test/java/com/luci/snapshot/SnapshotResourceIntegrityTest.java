@@ -27,9 +27,6 @@ class SnapshotResourceIntegrityTest {
     private static final Path SOURCES = ROOT.resolve("src/main/java");
     private static final List<Path> RELEASE_DOCUMENTS = List.of(
         ROOT.resolve("README.md"),
-        ROOT.resolve("MODRINTH_DESCRIPTION.md"),
-        ROOT.resolve("MODRINTH_CHANGELOG.md"),
-        ROOT.resolve("RELEASE_CHECKLIST.md"),
         ROOT.resolve("docs/FEATURE_STATUS.md")
     );
 
@@ -156,22 +153,18 @@ class SnapshotResourceIntegrityTest {
                 () -> "Overbroad depth claim found in " + document);
         }
 
-        String description = Files.readString(ROOT.resolve("MODRINTH_DESCRIPTION.md"), StandardCharsets.UTF_8);
-        String normalizedDescription = description.replaceAll("\\s+", " ");
-        assertTrue(description.contains("does not send the full-resolution PNG or its local path"));
-        assertTrue(description.contains("no analytics or telemetry"));
-        assertTrue(description.contains("singleplayer-only") || description.contains("singleplayer"));
-        assertTrue(description.contains("Copyright (c) 2026 luci"));
-        assertTrue(normalizedDescription.contains("All Rights Reserved/No License"));
-        assertFalse(description.contains("Snapshot is MIT licensed"));
-
         String license = Files.readString(ROOT.resolve("LICENSE"), StandardCharsets.UTF_8);
         assertTrue(license.contains("Copyright (c) 2026 luci. All rights reserved."));
         assertTrue(license.contains("No open-source license is granted"));
         assertFalse(license.contains("Permission is hereby granted"));
 
         String readme = Files.readString(ROOT.resolve("README.md"), StandardCharsets.UTF_8);
+        assertTrue(readme.contains("does not send the full-resolution PNG or its local"));
+        assertTrue(readme.contains("no analytics or telemetry"));
+        assertTrue(readme.contains("singleplayer-only") || readme.contains("singleplayer"));
+        assertTrue(readme.contains("Copyright (c) 2026 luci"));
         assertTrue(readme.replaceAll("\\s+", " ").contains("All Rights Reserved/No License"));
+        assertFalse(readme.contains("Snapshot is MIT licensed"));
         assertFalse(readme.contains("original assets are MIT licensed"));
 
         String fontLicense = Files.readString(ROOT.resolve("FONT_LICENSE.md"), StandardCharsets.UTF_8);
