@@ -1,8 +1,8 @@
 # Snapshot
 
-Snapshot is a heavy-realism photography mod for Minecraft Fabric, authored by luci. It combines a
+Snapshot is a heavy-realism photography mod for Minecraft Fabric. It combines a
 craftable survival camera, a DSLR-style viewfinder, local PNG capture, map-backed photographs, long
-exposures, astrophotography tools, and an in-game lighttable.
+exposures, astrophotography tools, and an in-game light table.
 
 Snapshot `0.1.0+26.2` is a beta built and tested specifically for Minecraft `26.2`.
 
@@ -12,8 +12,7 @@ Snapshot `0.1.0+26.2` is a beta built and tested specifically for Minecraft `26.
 - Fabric Loader `0.19.2` or newer
 - Fabric API `0.152.2+26.2` or newer for Minecraft 26.2
 - Java 25 or newer
-- Snapshot on the client
-
+  
 Install Snapshot on the server for the complete multiplayer experience: survival camera checks,
 paper consumption, Photograph and Photo Map delivery, commands, and authoritative time or weather
 changes. Mod Menu, Sodium, Iris, and Image2Map are optional and are not bundled.
@@ -27,20 +26,20 @@ changes. Mod Menu, Sodium, Iris, and Image2Map are optional and are not bundled.
 - Auto ISO ceiling and minimum-shutter controls, three-frame bracketing, and HDR merge
 - Half-press AF/AE lock, latched AE-L and AF-L, manual focus, and nine clickable AF points
 - Smooth 18-200mm focal-length adjustment and six selectable lens simulations
-- Simulated ND, graduated ND, polarizer, diffusion, and infrared filters
-- RGB histogram, highlight zebras, waveform, false color, clipping readouts, and focus peaking
-- Neutral, Warm 400, Muted Chrome, and Monochrome color profiles
+- Simulated ND, graduated ND, polariser, diffusion, and infrared filters
+- RGB histogram, highlight zebras, waveform, false colour, clipping readouts, and focus peaking
+- Neutral, Warm 400, Muted Chrome, and Monochrome colour profiles
 - Full, 4:3, square, and 2.39:1 framing, plus camera roll from -30 to +30 degrees
 - Low, Medium, Ultra, and Screenshot Ultra optics presets
 
 The lens and filter choices are camera profiles, not separate craftable lens or filter items.
 
-## Optics and renderer behavior
+## Optics and renderer behaviour
 
 Snapshot reads Minecraft's main GPU depth texture for live foreground and background depth of field
 when its native post-process chain is available. Aperture and focus changes are visible before the
 shutter is released, with polygon aperture shapes, cat-eye bokeh, foreground spill, focus breathing,
-film color, rain droplets, condensation, and lens dust.
+film colour, rain droplets, condensation, and lens dust.
 
 If another Minecraft post effect owns that chain, Snapshot preserves it and uses a capture-time
 fallback based on block ray casts. Opaque scene geometry represented in the main depth texture can
@@ -54,7 +53,7 @@ pixels. Focus peaking is a composition assist and is suppressed during capture.
 
 Snapshot detects Sodium and Iris at runtime and records the renderer and shader-pack state in metadata.
 The release test matrix covers Vanilla, Sodium, Iris without a shader pack, and Iris with a shader pack.
-Individual shader packs can still change depth, exposure, or post-processing behavior.
+Individual shader packs can still change depth, exposure, or post-processing behaviour.
 
 ## Long exposure and astrophotography
 
@@ -64,7 +63,7 @@ Individual shader packs can still change depth, exposure, or post-processing beh
 - Carrying `snapshot:tripod` locks camera orientation during long exposures
 - `F12` applies a 24mm, f/1.8, ISO 1600, 15s, 3800K, infinity-focus night-sky setup
 - Denoise, Deep Sky, and Star Trails temporal stacking modes
-- Modeled dark-signal correction that scales with ISO and exposure time
+- Modelled dark-signal correction that scales with ISO and exposure time
 - Sidereal and lunar tracking assistance, a 200mm Moon setup, red night-vision HUD, and composition guide
 - 3x2s, 5x5s, and 10x10s interval programs with visible progress
 - Exposure duration, stack mode, interval, frame count, stabilization, and shader state in metadata
@@ -86,7 +85,7 @@ and a three-panel feathered panorama. The PRINT controls provide 128x128, 256x12
 
 On a Snapshot server, capture sends the title, dimensions, camera metadata, local-export status, and a
 small RGBA thumbnail to create in-game items. It does not send the full-resolution PNG or its local
-file path. The server returns a `snapshot:photograph` and a locked filled map generated from that
+file path. The server returns a `snapshot:photograph` and a locked, filled map generated from that
 thumbnail. Both display the same map-resolution image and work in ordinary item frames; right-clicking
 the Photograph opens an enlarged map viewer.
 
@@ -105,7 +104,7 @@ handoff is tested with Image2Map `0.14.0+26.2`.
 
 ## Lighttable and journal
 
-Press `M` to open the local camera roll. It supports albums, favorites, 0-5 ratings, side-by-side
+Press `M` to open the local camera roll. It supports albums, favourites, 0-5 ratings, side-by-side
 comparison, deletion, metadata, and composition scores. Press `Tab` to filter albums, `A` to file a
 hovered image, and `J` from the lighttable to open the journal.
 
@@ -124,7 +123,7 @@ exhibitions, server competitions, or a scientific species catalogue.
 - `F9`: exposure assist, `F10`: exposure mode, `F12`: astrophotography setup
 - `` ` ``: camera command dial, `X`: clickable AF-point selector
 - `[` / `]`: latch AE-L / AF-L
-- `Z`: color profile, `Y`: aspect ratio, `F8`: color mood
+- `Z`: colour profile, `Y`: aspect ratio, `F8`: colour mood
 - `U`: compact/expanded HUD, `F7`: environment preset, `J`: tutorial, `M`: lighttable
 
 All bindings appear under the `Snapshot` category and can be remapped.
