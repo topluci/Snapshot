@@ -2,7 +2,7 @@
 
 All notable user-facing changes to Snapshot are documented here.
 
-## 0.1.0+26.2 - 2026-07-22
+## 0.1.0+26.2 - 2026-07-23
 
 ### Camera and capture
 
@@ -37,8 +37,8 @@ All notable user-facing changes to Snapshot are documented here.
 
 - This release targets Minecraft 26.2, Fabric Loader 0.19.2 or newer, Fabric API 0.152.2+26.2 or
   newer, and Java 25 or newer.
-- OpenGL is release tested. Minecraft 26.2's built-in experimental Vulkan backend is expected to be
-  compatible but has not yet completed Snapshot's renderer smoke matrix. The third-party VulkanMod
-  renderer is not supported.
+- OpenGL is release tested with Vanilla, Sodium, and Iris. Minecraft 26.2's built-in experimental
+  Vulkan backend is also release tested for viewfinder controls and capture on macOS through
+  MoltenVK. The third-party VulkanMod renderer is not supported.
 - Tiled 2X is sequential and is intended for stationary scenes. Transparent particles and some
   shader-specific effects may not provide usable depth.

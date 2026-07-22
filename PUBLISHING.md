@@ -11,8 +11,11 @@ All Rights Reserved/No License.
 4. Run `./gradlew snapshotSmokeTest -PsnapshotSmokeCase=highres --console=plain`.
 5. Run `./gradlew snapshotSmokeTest -PsnapshotSmokeCase=performance --console=plain`.
 6. Run `./scripts/test-renderers.sh` and `./scripts/test-astro-renderers.sh` for the installed renderer matrix.
-7. Review `run/snapshot-test-results/` and the QA PNGs in `run/screenshots/`.
-8. Confirm `docs/FEATURE_STATUS.md` contains no claim beyond the tested implementation.
+7. Run the multiplayer allowed/denied cases against a Snapshot server and `multiplayer_vanilla`
+   against an unmodded server.
+8. Repeat the `renderer` and `controls` cases with Minecraft 26.2's built-in Vulkan backend.
+9. Review `run/snapshot-test-results/` and the QA PNGs in `run/screenshots/`.
+10. Confirm `docs/FEATURE_STATUS.md` contains no claim beyond the tested implementation.
 
 The uploadable JAR and `SHA256SUMS.txt` are written to `build/libs/`. The `-sources.jar` is not the
 player download.

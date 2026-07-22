@@ -25,6 +25,7 @@ import com.luci.snapshot.client.photo.SnapshotPhotoViewer;
 import com.luci.snapshot.config.SnapshotConfig;
 import com.luci.snapshot.item.PhotographData;
 import com.luci.snapshot.item.SnapshotItems;
+import com.luci.snapshot.network.ApplyEnvironmentPayload;
 import com.mojang.blaze3d.platform.InputConstants;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -45,6 +46,7 @@ import java.util.stream.Stream;
 import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
@@ -105,6 +107,8 @@ public final class SnapshotDevSmokeTest {
     private static int performancePresetIndex;
     private static int multiplayerPhotographsAtStart;
     private static int multiplayerMapsAtStart;
+    private static String multiplayerEnvironmentPreset;
+    private static long multiplayerEnvironmentTarget;
     private static int image2MapBundlesAtStart;
     private static boolean keybindHudExpandedAtStart;
     private static boolean keybindAeLockAtStart;
@@ -616,31 +620,61 @@ public final class SnapshotDevSmokeTest {
         } else if (stage >= 100 && stage <= 104) {
             tickPerformance(client);
         } else if (stage == 200 && ticks >= 40) {
-            SnapshotCameraController.applyEnvironmentPreset("night");
-            stage = 201;
-            ticks = 0;
-        } else if (stage == 201 && ticks >= 60) {
-            long previewTime = Math.floorMod(client.level.getOverworldClockTime(), 24_000L);
-            if (previewTime < 17_000L || previewTime > 19_000L) {
-                fail(client, "Client-only night preview did not become visible in the viewfinder.", null);
+            if ("multiplayer_vanilla".equalsIgnoreCase(TEST_CASE)) {
+                if (ClientPlayNetworking.canSend(ApplyEnvironmentPayload.TYPE)) {
+                    fail(client, "Vanilla server unexpectedly advertised Snapshot networking.", null);
+                    return;
+                }
+                SnapshotCameraController.settings().setCaptureTechnique(CaptureTechnique.SINGLE);
+                SnapshotCameraController.settings().setExposureBracket(ExposureBracket.OFF);
+                benchmarkStartedNanos = System.nanoTime();
+                SnapshotCameraController.triggerCapture();
+                stage = 203;
+                ticks = 0;
                 return;
             }
-            SnapshotCameraController.applyEnvironmentPreset("clear");
-            long time = Math.floorMod(client.level.getOverworldClockTime(), 24_000L);
-            boolean nightApplied = time >= 17_000L && time <= 19_000L;
-            boolean expectedAllowed = "allowed".equalsIgnoreCase(EXPECTED_ENVIRONMENT);
             if (EXPECTED_ENVIRONMENT.isBlank()) {
                 fail(client, "Multiplayer test did not declare whether environment changes should be allowed.", null);
                 return;
             }
-            if (nightApplied != expectedAllowed) {
-                fail(client, "Multiplayer environment permission was " + (nightApplied ? "allowed" : "denied")
+            long currentTime = Math.floorMod(client.level.getOverworldClockTime(), 24_000L);
+            boolean currentlyNight = currentTime >= 17_000L && currentTime <= 19_000L;
+            multiplayerEnvironmentPreset = currentlyNight ? "noon" : "night";
+            multiplayerEnvironmentTarget = currentlyNight ? 6_000L : 18_000L;
+            if ("allowed".equalsIgnoreCase(EXPECTED_ENVIRONMENT)) {
+                if (!SnapshotCameraController.applyEnvironmentPreset(multiplayerEnvironmentPreset)) {
+                    fail(client, "Privileged multiplayer environment control was rejected by the client.", null);
+                    return;
+                }
+            } else if (ClientPlayNetworking.canSend(ApplyEnvironmentPayload.TYPE)) {
+                ClientPlayNetworking.send(new ApplyEnvironmentPayload(multiplayerEnvironmentPreset));
+            } else {
+                fail(client, "Multiplayer environment payload was unavailable.", null);
+                return;
+            }
+            stage = 201;
+            ticks = 0;
+        } else if (stage == 201 && ticks >= 60) {
+            long previewTime = Math.floorMod(client.level.getOverworldClockTime(), 24_000L);
+            boolean expectedAllowed = "allowed".equalsIgnoreCase(EXPECTED_ENVIRONMENT);
+            if (expectedAllowed) {
+                if (!matchesClockTime(previewTime, multiplayerEnvironmentTarget)) {
+                    fail(client, "Client-only environment preview did not become visible in the viewfinder.", null);
+                    return;
+                }
+                SnapshotCameraController.applyEnvironmentPreset("clear");
+            }
+            long time = Math.floorMod(client.level.getOverworldClockTime(), 24_000L);
+            boolean presetApplied = matchesClockTime(time, multiplayerEnvironmentTarget);
+            if (presetApplied != expectedAllowed) {
+                fail(client, "Multiplayer environment permission was " + (presetApplied ? "allowed" : "denied")
                     + " but expected " + EXPECTED_ENVIRONMENT + ".", null);
                 return;
             }
             JsonObject metric = new JsonObject();
             metric.addProperty("operation", "environment_permission");
             metric.addProperty("expected", EXPECTED_ENVIRONMENT);
+            metric.addProperty("preset", multiplayerEnvironmentPreset);
             metric.addProperty("preview_time", previewTime);
             metric.addProperty("observed_time", time);
             METRICS.add(metric);
@@ -658,6 +692,14 @@ public final class SnapshotDevSmokeTest {
                 return;
             }
             pass(client, "Multiplayer permissions and photograph/map delivery completed.");
+        } else if (stage == 203 && ticks >= 120 && !SnapshotCameraController.captureInProgress()) {
+            addDurationMetric("multiplayer", "vanilla_server_local_capture", benchmarkStartedNanos, 20_000L);
+            if (countItem(client, SnapshotItems.PHOTOGRAPH) != multiplayerPhotographsAtStart
+                || countItem(client, Items.FILLED_MAP) != multiplayerMapsAtStart) {
+                fail(client, "Vanilla server unexpectedly delivered a Snapshot Photograph or map.", null);
+                return;
+            }
+            pass(client, "Vanilla-server local PNG capture completed.");
         } else if (stage == 300 && ticks >= 100) {
             if (!SnapshotCameraController.active()) {
                 SnapshotCameraController.toggle();
@@ -1158,6 +1200,11 @@ public final class SnapshotDevSmokeTest {
             preset + " " + operation + " exceeded " + maximumMillis + "ms (observed " + durationMillis + "ms).");
     }
 
+    private static boolean matchesClockTime(long observed, long expected) {
+        long difference = Math.abs(Math.floorMod(observed - expected + 12_000L, 24_000L) - 12_000L);
+        return difference <= 200L;
+    }
+
     private static void grabQaScreenshot(Minecraft client, String name, String label) {
         Screenshot.grab(client.gameDirectory, name, client.gameRenderer.mainRenderTarget(), 1,
             message -> SnapshotInit.LOGGER.info("[Snapshot] {} QA screenshot: {}", label, message.getString()));
@@ -1491,7 +1538,7 @@ public final class SnapshotDevSmokeTest {
             case "performance" -> 9;
             case "calibration" -> CALIBRATION_SHOTS.size();
             case "focus", "image2map", "clock", "renderer", "highres", "access", "controls",
-                "multiplayer_denied", "multiplayer_allowed" -> 1;
+                "multiplayer_denied", "multiplayer_allowed", "multiplayer_vanilla" -> 1;
             default -> 0;
         };
     }

@@ -52,10 +52,9 @@ Native gamepad viewfinder controls are enabled by default. Start toggles the fin
 handle half-press and shutter, the shoulder buttons cycle controls, the D-pad changes values, the
 right stick zooms, and the face buttons provide AF, AF-point, command-dial, and close actions.
 
-OpenGL is the release-tested graphics backend. Snapshot uses Minecraft's backend-neutral GPU,
-render-target, and post-process APIs without raw OpenGL calls, so Minecraft 26.2's built-in
-experimental Vulkan backend is expected to be compatible, but it has not yet completed Snapshot's
-renderer smoke matrix. The separate third-party VulkanMod renderer is not a supported configuration.
+OpenGL is release tested with Vanilla, Sodium, and Iris. Minecraft 26.2's built-in experimental
+Vulkan backend is also release tested for viewfinder controls and capture on macOS through MoltenVK.
+The separate third-party VulkanMod renderer is not a supported configuration.
 
 ## Long exposure & Astro
 

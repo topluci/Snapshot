@@ -25,7 +25,7 @@ more than the implemented column below.
 | Calibration | Disposable optical scene and ten measured captures for aperture, focus, ISO, shutter, and selectable AF points | `calibration` smoke case and JSON metrics |
 | Release automation | Pull-request CI, tag-based GitHub releases, checked JARs, SHA-256 file, local full-suite script, publication checklist | `.github/workflows`, `scripts/package-release.sh`, `PUBLISHING.md` |
 | Environment | Viewfinder-local time/weather preview; real changes gated by permission | Environment unit test and multiplayer allowed/denied cases |
-| Renderer support | OpenGL: Vanilla, Sodium, Iris without pack, Iris with pack; backend-neutral path intended for Minecraft 26.2's built-in experimental Vulkan renderer | OpenGL renderer scripts plus absence of raw OpenGL calls; Vulkan smoke coverage remains pending |
+| Renderer support | OpenGL: Vanilla, Sodium, Iris without pack, Iris with pack; Minecraft 26.2 built-in experimental Vulkan: controls and capture on macOS through MoltenVK | OpenGL renderer matrices plus Vulkan `renderer` and `controls` smoke cases |
 
 ## Explicit non-features and limits
 
@@ -49,6 +49,6 @@ more than the implemented column below.
   output, placeable multi-size photo block, or server-hosted high-resolution gallery in this release.
 - Compatibility is declared only for Minecraft 26.2. A successful build is not evidence for later
   Minecraft versions.
-- OpenGL is release tested. Minecraft 26.2's built-in experimental Vulkan backend is expected to be
-  compatible but is not yet part of the renderer smoke matrix. The third-party VulkanMod renderer is
-  not supported.
+- OpenGL is release tested with Vanilla, Sodium, and Iris. Minecraft 26.2's built-in experimental
+  Vulkan backend is release tested for viewfinder controls and capture on macOS through MoltenVK.
+  The third-party VulkanMod renderer is not supported.
