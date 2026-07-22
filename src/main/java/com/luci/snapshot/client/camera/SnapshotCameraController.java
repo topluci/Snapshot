@@ -12,6 +12,7 @@ import com.luci.snapshot.client.photo.PhotographyJournal;
 import com.luci.snapshot.client.photo.SnapshotLighttableScreen;
 import com.luci.snapshot.config.SnapshotConfig;
 import com.luci.snapshot.item.SnapshotItems;
+import com.luci.snapshot.util.AtomicFiles;
 import com.luci.snapshot.network.ApplyEnvironmentPayload;
 import com.luci.snapshot.network.CapturePhotoPayload;
 import com.mojang.blaze3d.platform.NativeImage;
@@ -21,7 +22,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -36,12 +36,15 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -70,6 +73,8 @@ public final class SnapshotCameraController {
     private static int environmentIndex;
     private static int particleCooldown;
     private static int analysisCooldown;
+    private static int opticalSampleCooldown;
+    private static int pipelineRefreshCooldown;
     private static boolean analysisRequested;
     private static boolean analysisInFlight;
     private static boolean halfPressActive;
@@ -89,10 +94,13 @@ public final class SnapshotCameraController {
     private static LongExposureAccumulator longExposure;
     private static PanoramaSession panorama;
     private static FocusStackSession focusStack;
+    private static HighResolutionSession highResolution;
     private static float lastYaw;
     private static float lastPitch;
     private static float yawVelocity;
     private static float pitchVelocity;
+    private static boolean privilegedViewfinderAccess;
+    private static boolean rollResetChordHeld;
 
     private SnapshotCameraController() {
     }
@@ -172,6 +180,7 @@ public final class SnapshotCameraController {
         previousFocusLocked = false;
         if (active && client.player != null && SETTINGS.autoFocus()) {
             updateAutoFocus(client);
+            afLockLatched = focusLocked;
         }
     }
 
@@ -216,27 +225,49 @@ public final class SnapshotCameraController {
     }
 
     public static boolean liveFilmActive() {
-        return active && LiveFilmPipeline.activeFor(Minecraft.getInstance(), SETTINGS.filmProfile());
+        Minecraft client = Minecraft.getInstance();
+        return active && gameplayScreenAvailable(client)
+            && LiveFilmPipeline.activeFor(client, SETTINGS.filmProfile());
+    }
+
+    public static int liveOpticsQualityPercent() {
+        return LiveFilmPipeline.adaptiveQualityPercent();
+    }
+
+    public static int liveOpticsRenderScalePercent() {
+        return LiveFilmPipeline.renderScalePercent();
     }
 
     public static void prepareLiveOpticsFrame() {
-        if (active) {
-            LiveFilmPipeline.prepareFrame(Minecraft.getInstance(), SETTINGS);
+        Minecraft client = Minecraft.getInstance();
+        if (active && gameplayScreenAvailable(client)) {
+            LiveFilmPipeline.prepareFrame(client, SETTINGS);
         }
     }
 
+    public static boolean viewfinderHudVisible() {
+        Minecraft client = Minecraft.getInstance();
+        return active && (gameplayScreenAvailable(client) || cameraControlScreenOpen(client));
+    }
+
+    public static boolean viewfinderRendering() {
+        return active && gameplayScreenAvailable(Minecraft.getInstance());
+    }
+
     static boolean opticalAssistsSuppressed() {
-        return pendingCapture != null || longExposure != null || panorama != null || focusStack != null;
+        return pendingCapture != null || longExposure != null || panorama != null || focusStack != null
+            || highResolution != null;
     }
 
     public static boolean captureInProgress() {
         return pendingCapture != null || longExposure != null || panorama != null || focusStack != null
+            || highResolution != null
             || intervalShotsRemaining > 0;
     }
 
     public static void triggerCapture() {
         Minecraft client = Minecraft.getInstance();
-        if (active && client.player != null) {
+        if (active && client.player != null && gameplayScreenAvailable(client)) {
             queueCapture(client);
         }
     }
@@ -249,16 +280,37 @@ public final class SnapshotCameraController {
         return ENVIRONMENT_PRESETS.clone();
     }
 
-    public static void applyEnvironmentPreset(String preset) {
+    public static boolean applyEnvironmentPreset(String preset) {
+        Minecraft client = Minecraft.getInstance();
+        if (!environmentControlsAllowed()) {
+            if (client.player != null) {
+                client.player.sendOverlayMessage(Component.literal(
+                    "Snapshot environment controls require Creative mode or cheats/operator permission."
+                ));
+            }
+            return false;
+        }
+        int selectedIndex = -1;
         for (int index = 0; index < ENVIRONMENT_PRESETS.length; index++) {
             if (ENVIRONMENT_PRESETS[index].equals(preset)) {
-                environmentIndex = index;
+                selectedIndex = index;
                 break;
             }
         }
+        if (selectedIndex < 0) {
+            return false;
+        }
+        environmentIndex = selectedIndex;
         if (ClientPlayNetworking.canSend(ApplyEnvironmentPayload.TYPE)) {
             ClientPlayNetworking.send(new ApplyEnvironmentPayload(preset));
         }
+        return true;
+    }
+
+    public static boolean environmentControlsAllowed() {
+        Minecraft client = Minecraft.getInstance();
+        return client.player != null && (client.player.hasInfiniteMaterials()
+            || client.player.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER));
     }
 
     public static float lensFov(float vanillaFov) {
@@ -269,7 +321,8 @@ public final class SnapshotCameraController {
         long now = System.nanoTime();
         double elapsed = lastFovUpdateNanos == 0L ? 0.0 : Math.min(0.05, (now - lastFovUpdateNanos) / 1_000_000_000.0);
         lastFovUpdateNanos = now;
-        double target = SETTINGS.targetFov() * lensBreathingScale();
+        double target = highResolution == null
+            ? SETTINGS.targetFov() * lensBreathingScale() : highResolution.tileFov();
         double blend = 1.0 - Math.exp(-elapsed * 10.0);
         currentFov += (target - currentFov) * blend;
         return (float) currentFov;
@@ -302,8 +355,18 @@ public final class SnapshotCameraController {
         if (active) {
             close(client);
         } else {
-            open(client);
+            open(client, false);
         }
+    }
+
+    public static boolean openFromCameraItem(InteractionHand hand) {
+        Minecraft client = Minecraft.getInstance();
+        if (active || client.player == null || !gameplayScreenAvailable(client)
+            || client.player.getItemInHand(hand).getItem() != SnapshotItems.CAMERA) {
+            return false;
+        }
+        open(client, false);
+        return active;
     }
 
     public static boolean handleMouseButton(int button, int action) {
@@ -311,25 +374,16 @@ public final class SnapshotCameraController {
             return false;
         }
         Minecraft client = Minecraft.getInstance();
-        if (button == InputConstants.MOUSE_BUTTON_RIGHT) {
-            if (action == InputConstants.PRESS) {
-                halfPressActive = true;
-                aeLocked = true;
-                lockedRequiredExposureStops = requiredExposureStops;
-                focusLocked = false;
-                previousFocusLocked = false;
-                updateAutoFocus(client);
-                playAdjustmentSound(client, 1.52F);
-            } else if (action == InputConstants.RELEASE) {
-                halfPressActive = false;
-                aeLocked = aeLockLatched;
-                if (!afLockLatched) {
-                    focusLocked = false;
-                }
+        if (!gameplayScreenAvailable(client)) {
+            return false;
+        }
+        if (SnapshotKeybinds.matchesFocusMouse(button)) {
+            if (action == InputConstants.PRESS || action == InputConstants.RELEASE) {
+                setHalfPress(action == InputConstants.PRESS);
             }
             return true;
         }
-        if (button == InputConstants.MOUSE_BUTTON_LEFT) {
+        if (SnapshotKeybinds.matchesShutterMouse(button)) {
             if (action == InputConstants.PRESS) {
                 queueCapture(client);
             }
@@ -338,11 +392,57 @@ public final class SnapshotCameraController {
         return false;
     }
 
+    public static boolean setHalfPress(boolean pressed) {
+        Minecraft client = Minecraft.getInstance();
+        if (!active || client.player == null || pressed && !gameplayScreenAvailable(client)) {
+            if (!pressed) {
+                halfPressActive = false;
+                aeLocked = aeLockLatched;
+            }
+            return false;
+        }
+        if (pressed == halfPressActive) {
+            return true;
+        }
+        if (pressed) {
+            aeLockLatched = false;
+            afLockLatched = false;
+            halfPressActive = true;
+            aeLocked = true;
+            lockedRequiredExposureStops = requiredExposureStops;
+            focusLocked = false;
+            previousFocusLocked = false;
+            HitResult hit = focusHit(client, 256.0);
+            if (SETTINGS.autoFocus()) {
+                updateAutoFocus(client, hit);
+            } else if (hit.getType() != HitResult.Type.MISS) {
+                SETTINGS.setFocusDistance(client.player.getEyePosition().distanceTo(hit.getLocation()));
+                focusLocked = true;
+                previousFocusLocked = true;
+                client.player.playSound(SoundEvents.EXPERIENCE_ORB_PICKUP, 0.16F, 1.78F);
+            }
+            playAdjustmentSound(client, 1.52F);
+        } else {
+            halfPressActive = false;
+            if (focusLocked) {
+                afLockLatched = SETTINGS.autoFocus();
+                client.player.sendOverlayMessage(Component.literal(
+                    (SETTINGS.autoFocus() ? "AF LOCK  " : "MF  ") + SETTINGS.focusDistanceLabel()
+                ));
+            }
+            aeLocked = aeLockLatched;
+        }
+        return true;
+    }
+
     public static boolean handleZoomScroll(double amount) {
         if (!active || amount == 0.0) {
             return false;
         }
         Minecraft client = Minecraft.getInstance();
+        if (!gameplayScreenAvailable(client)) {
+            return false;
+        }
         boolean controlDown = InputConstants.isKeyDown(client.getWindow(), InputConstants.KEY_LCONTROL)
             || InputConstants.isKeyDown(client.getWindow(), InputConstants.KEY_RCONTROL);
         if (controlDown) {
@@ -357,8 +457,8 @@ public final class SnapshotCameraController {
         return true;
     }
 
-    private static void open(Minecraft client) {
-        if (client.player == null || client.level == null) {
+    private static void open(Minecraft client, boolean privilegedAccess) {
+        if (client.player == null || client.level == null || !gameplayScreenAvailable(client)) {
             return;
         }
 
@@ -367,12 +467,13 @@ public final class SnapshotCameraController {
             client.player.setXRot(longExposure.lockedPitch());
         }
 
-        if (!canUseCamera(client)) {
+        if (!privilegedAccess && !canUseCamera(client)) {
             client.player.sendOverlayMessage(Component.translatable("message.snapshot.no_camera"));
             return;
         }
 
         active = true;
+        privilegedViewfinderAccess = privilegedAccess;
         previousFov = client.options.fov().get();
         previousSensitivity = client.options.sensitivity().get();
         previousSmoothCamera = client.options.smoothCamera;
@@ -386,29 +487,23 @@ public final class SnapshotCameraController {
         lastYaw = client.player.getYRot();
         lastPitch = client.player.getXRot();
         previousFocusLocked = false;
+        opticalSampleCooldown = 0;
+        pipelineRefreshCooldown = 0;
+        analysisCooldown = 0;
         applyFov(client, true);
         client.player.playSound(SoundEvents.SPYGLASS_USE, 0.35F, 0.82F);
     }
 
     private static void close(Minecraft client) {
         active = false;
-        pendingBurstShots = 0;
-        pendingCapture = null;
-        longExposure = null;
-        if (panorama != null) {
-            panorama.close(client);
-            panorama = null;
-        }
-        if (focusStack != null) {
-            focusStack.close(client);
-            focusStack = null;
-        }
+        privilegedViewfinderAccess = false;
+        cancelCaptureOperations(client);
         halfPressActive = false;
         aeLocked = false;
         aeLockLatched = false;
         afLockLatched = false;
-        stopIntervalometer();
         focusLocked = false;
+        rollResetChordHeld = false;
         LiveFilmPipeline.clear(client);
         restoreViewOptions(client);
         refreshSoundscape(client);
@@ -424,8 +519,20 @@ public final class SnapshotCameraController {
         commandDialTicks = Math.max(0, commandDialTicks - 1);
         intervalDelayTicks = Math.max(0, intervalDelayTicks - 1);
 
+        if (!gameplayScreenAvailable(client)) {
+            if (active) {
+                if (cameraControlScreenOpen(client)) {
+                    cancelCaptureOperations(client);
+                } else {
+                    close(client);
+                }
+            }
+            SnapshotKeybinds.discardGameplayClicks();
+            return;
+        }
+
         while (SnapshotKeybinds.toggle().consumeClick()) {
-            toggle();
+            toggleFromViewfinderKey(client);
         }
 
         while (SnapshotKeybinds.lighttable().consumeClick()) {
@@ -444,11 +551,16 @@ public final class SnapshotCameraController {
             return;
         }
 
+        handleRollResetChord(client);
+
         if (panorama != null) {
             panorama.tick(client);
         }
         if (focusStack != null) {
             focusStack.tick(client);
+        }
+        if (highResolution != null) {
+            highResolution.tick(client);
         }
 
         if (longExposure != null && longExposure.stabilized()) {
@@ -485,18 +597,26 @@ public final class SnapshotCameraController {
         }
 
         updateMotion(client);
-        updateAutoFocus(client);
-        updateSensorAdaptation(client);
+        if (opticalSampleCooldown-- <= 0) {
+            HitResult meteringHit = focusHit(client, 256.0);
+            updateAutoFocus(client, meteringHit);
+            updateSensorAdaptation(client, meteringHit);
+            opticalSampleCooldown = 2;
+        }
         updateAtmosphere(client);
         if (SETTINGS.exposureAssist() != ExposureAssist.OFF && longExposure == null && analysisCooldown-- <= 0) {
             analysisRequested = true;
-            analysisCooldown = 10;
+            analysisCooldown = 20;
         }
 
         while (SnapshotKeybinds.capture().consumeClick()) {
-            queueCapture(client);
+            if (captureInProgress()) {
+                cancelActiveCapture(client);
+            } else {
+                queueCapture(client);
+            }
         }
-        boolean controlsLocked = longExposure != null || panorama != null || focusStack != null;
+        boolean controlsLocked = longExposure != null || panorama != null || focusStack != null || highResolution != null;
         while (SnapshotKeybinds.nextControl().consumeClick()) {
             if (!controlsLocked) {
                 SETTINGS.selectNext();
@@ -590,8 +710,8 @@ public final class SnapshotCameraController {
             playAdjustmentSound(client, SETTINGS.astrophotography() ? 0.88F : 1.08F);
         }
         while (SnapshotKeybinds.applyEnvironment().consumeClick()) {
-            environmentIndex = (environmentIndex + 1) % ENVIRONMENT_PRESETS.length;
-            applyEnvironmentPreset(environmentPreset());
+            String nextEnvironment = ENVIRONMENT_PRESETS[(environmentIndex + 1) % ENVIRONMENT_PRESETS.length];
+            applyEnvironmentPreset(nextEnvironment);
         }
 
         if (pendingBurstShots > 0 && burstCooldown == 0) {
@@ -608,7 +728,10 @@ public final class SnapshotCameraController {
             intervalDelayTicks = intervalShotsRemaining > 0 ? intervalPeriodTicks : 0;
         }
 
-        LiveFilmPipeline.update(client, SETTINGS.filmProfile());
+        if (pipelineRefreshCooldown-- <= 0) {
+            LiveFilmPipeline.update(client, SETTINGS.filmProfile());
+            pipelineRefreshCooldown = 10;
+        }
 
     }
 
@@ -622,16 +745,30 @@ public final class SnapshotCameraController {
     }
 
     private static void updateAutoFocus(Minecraft client) {
+        updateAutoFocus(client, focusHit(client, 256.0));
+    }
+
+    private static void updateAutoFocus(Minecraft client, HitResult hit) {
         if (!SETTINGS.autoFocus()) {
-            focusLocked = false;
-            previousFocusLocked = false;
+            boolean wasLocked = focusLocked;
+            if (hit.getType() == HitResult.Type.MISS) {
+                focusLocked = false;
+            } else {
+                double subjectDistance = client.player.getEyePosition().distanceTo(hit.getLocation());
+                double tolerance = Math.max(0.12, SETTINGS.focusDistance() * 0.025
+                    * (SETTINGS.apertureNumber() / 1.8) * (50.0 / SETTINGS.focalLengthPrecise()));
+                focusLocked = Math.abs(subjectDistance - SETTINGS.focusDistance()) <= tolerance;
+            }
+            if (focusLocked && !wasLocked) {
+                client.player.playSound(SoundEvents.EXPERIENCE_ORB_PICKUP, 0.12F, 1.72F);
+            }
+            previousFocusLocked = focusLocked;
             return;
         }
         if ((halfPressActive || afLockLatched) && focusLocked) {
             return;
         }
 
-        HitResult hit = focusHit(client, 256.0);
         focusLocked = hit.getType() != HitResult.Type.MISS;
         if (focusLocked) {
             SETTINGS.setAutoFocusDistance(client.player.getEyePosition().distanceTo(hit.getLocation()));
@@ -642,10 +779,9 @@ public final class SnapshotCameraController {
         previousFocusLocked = focusLocked;
     }
 
-    private static void updateSensorAdaptation(Minecraft client) {
+    private static void updateSensorAdaptation(Minecraft client, HitResult hit) {
         int localBrightness = client.level.getMaxLocalRawBrightness(client.player.blockPosition());
         int subjectBrightness = localBrightness;
-        HitResult hit = focusHit(client, 128.0);
         if (hit.getType() != HitResult.Type.MISS) {
             BlockPos candidate = BlockPos.containing(hit.getLocation());
             if (client.level.hasChunk(candidate.getX() >> 4, candidate.getZ() >> 4)) {
@@ -666,16 +802,41 @@ public final class SnapshotCameraController {
         }
         SETTINGS.applyAutoExposure(requiredExposureStops);
         double target = SETTINGS.exposureStops() - requiredExposureStops;
-        adaptedExposureStops += (target - adaptedExposureStops) * 0.085;
+        adaptedExposureStops += (target - adaptedExposureStops) * 0.24;
     }
 
     private static HitResult focusHit(Minecraft client, double maximumDistance) {
         Vec3 origin = client.player.getEyePosition();
-        float yaw = client.player.getYRot() + SETTINGS.focusPointX() * 8.0F;
-        float pitch = client.player.getXRot() + SETTINGS.focusPointY() * 7.0F;
+        double verticalFov = Math.toRadians(Mth.clamp(currentFov > 0.0 ? currentFov : SETTINGS.targetFov(), 1.0, 170.0));
+        double aspect = client.getWindow().getHeight() <= 0
+            ? 1.0 : client.getWindow().getWidth() / (double) client.getWindow().getHeight();
+        double sensorX = SETTINGS.focusPointX() * 0.5;
+        double sensorY = SETTINGS.focusPointY() * 0.5;
+        float yawOffset = (float) Math.toDegrees(Math.atan(Math.tan(verticalFov * 0.5) * aspect * sensorX));
+        float pitchOffset = (float) Math.toDegrees(Math.atan(Math.tan(verticalFov * 0.5) * sensorY));
+        float yaw = client.player.getYRot() - yawOffset;
+        float pitch = client.player.getXRot() + pitchOffset;
         Vec3 direction = Vec3.directionFromRotation(pitch, yaw);
         Vec3 end = origin.add(direction.scale(maximumDistance));
-        return client.level.clip(new ClipContext(origin, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, client.player));
+        HitResult blockHit = client.level.clip(
+            new ClipContext(origin, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, client.player)
+        );
+        double blockDistance = blockHit.getType() == HitResult.Type.MISS
+            ? maximumDistance * maximumDistance : origin.distanceToSqr(blockHit.getLocation());
+        AABB searchBounds = client.player.getBoundingBox().expandTowards(direction.scale(maximumDistance)).inflate(1.0);
+        EntityHitResult entityHit = ProjectileUtil.getEntityHitResult(
+            client.level,
+            client.player,
+            origin,
+            end,
+            searchBounds,
+            entity -> !entity.isSpectator() && entity.isPickable(),
+            0.3F
+        );
+        if (entityHit != null && origin.distanceToSqr(entityHit.getLocation()) < blockDistance) {
+            return entityHit;
+        }
+        return blockHit;
     }
 
     private static void updateAtmosphere(Minecraft client) {
@@ -704,7 +865,7 @@ public final class SnapshotCameraController {
     }
 
     private static void queueCapture(Minecraft client) {
-        if (panorama != null || focusStack != null) {
+        if (!gameplayScreenAvailable(client) || panorama != null || focusStack != null || highResolution != null) {
             return;
         }
         if (longExposure != null) {
@@ -720,6 +881,10 @@ public final class SnapshotCameraController {
         }
         if (SETTINGS.captureTechnique() == CaptureTechnique.FOCUS_STACK) {
             startFocusStack(client);
+            return;
+        }
+        if (SETTINGS.captureTechnique() == CaptureTechnique.TILED_2X) {
+            startHighResolutionCapture(client);
             return;
         }
         if (SETTINGS.exposureBracket().enabled() && !SETTINGS.longExposure()) {
@@ -753,8 +918,7 @@ public final class SnapshotCameraController {
         CameraSettings capturedSettings = SETTINGS.copy();
         capturedSettings.setExposureBracket(ExposureBracket.OFF);
         String title = "snapshot_" + LocalDateTime.now().format(FILE_STAMP) + "_PANORAMA";
-        boolean liveFilmBaked = LiveFilmPipeline.activeFor(client, capturedSettings.filmProfile());
-        panorama = new PanoramaSession(title, capturedSettings, liveFilmBaked,
+        panorama = new PanoramaSession(title, capturedSettings, false,
             client.player.getYRot(), client.player.getXRot(), hasItem(client, SnapshotItems.TRIPOD));
         panorama.begin(client);
         shutterTicks = 3;
@@ -783,14 +947,57 @@ public final class SnapshotCameraController {
         CameraSettings capturedSettings = SETTINGS.copy();
         capturedSettings.setExposureBracket(ExposureBracket.OFF);
         String title = "snapshot_" + LocalDateTime.now().format(FILE_STAMP) + "_FOCUS_STACK";
-        boolean liveFilmBaked = LiveFilmPipeline.activeFor(client, capturedSettings.filmProfile());
-        focusStack = new FocusStackSession(title, capturedSettings, liveFilmBaked,
+        focusStack = new FocusStackSession(title, capturedSettings, false,
             client.player.getYRot(), client.player.getXRot(), hasItem(client, SnapshotItems.TRIPOD),
             SceneDepthMap.capture(client, capturedSettings));
         focusStack.begin(client);
         shutterTicks = 3;
         client.player.playSound(SoundEvents.CROSSBOW_LOADING_START.value(), 0.20F, 1.38F);
         client.player.sendOverlayMessage(Component.literal("Focus stack NEAR 1 / 3"));
+    }
+
+    private static void startHighResolutionCapture(Minecraft client) {
+        if (client.player == null || pendingCapture != null || longExposure != null) {
+            return;
+        }
+        if (!canUseCamera(client)) {
+            client.player.sendOverlayMessage(Component.translatable("message.snapshot.no_camera"));
+            return;
+        }
+        if (SnapshotConfig.get().requirePaper && !client.player.hasInfiniteMaterials()
+            && countItem(client, SnapshotItems.PHOTOGRAPHIC_PAPER) < 1) {
+            client.player.sendOverlayMessage(Component.literal("Snapshot requires photographic paper."));
+            return;
+        }
+        if (SETTINGS.longExposure()) {
+            client.player.sendOverlayMessage(Component.literal("Tiled 2X needs a shutter speed faster than one second."));
+            return;
+        }
+        long pixels = (long) client.gameRenderer.mainRenderTarget().width
+            * client.gameRenderer.mainRenderTarget().height;
+        if (pixels * 32L > 512L * 1024L * 1024L) {
+            client.player.sendOverlayMessage(Component.literal(
+                "Tiled 2X needs too much memory at this window size. Lower the game resolution first."
+            ));
+            return;
+        }
+
+        CameraSettings capturedSettings = SETTINGS.copy();
+        capturedSettings.setExposureBracket(ExposureBracket.OFF);
+        String title = "snapshot_" + LocalDateTime.now().format(FILE_STAMP) + "_TILED_2X";
+        RenderTarget target = client.gameRenderer.mainRenderTarget();
+        highResolution = new HighResolutionSession(
+            title,
+            capturedSettings,
+            client.player.getYRot(),
+            client.player.getXRot(),
+            target.width / (double) Math.max(1, target.height),
+            hasItem(client, SnapshotItems.TRIPOD)
+        );
+        highResolution.begin(client);
+        shutterTicks = 3;
+        client.player.playSound(SoundEvents.CROSSBOW_LOADING_START.value(), 0.20F, 1.30F);
+        client.player.sendOverlayMessage(Component.literal("Tiled 2X 1 / 4"));
     }
 
     private static void captureOne(Minecraft client) {
@@ -819,33 +1026,32 @@ public final class SnapshotCameraController {
         CameraSettings capturedSettings = SETTINGS.copy();
         SceneDepthMap depthMap = SceneDepthMap.capture(client, capturedSettings);
         String title = "snapshot_" + LocalDateTime.now().format(FILE_STAMP);
-        boolean liveFilmBaked = LiveFilmPipeline.activeFor(client, capturedSettings.filmProfile());
         shutterTicks = capturedSettings.longExposure() ? 0 : Math.min(5,
             2 + (int) Math.round(Math.max(0.0, Math.log10(capturedSettings.shutterSeconds() * 125.0 + 1.0))));
         flashTicks = capturedSettings.flash() ? 5 : 0;
         client.player.playSound(SoundEvents.CROSSBOW_SHOOT, 0.26F, 1.72F);
         if (capturedSettings.longExposure()) {
             boolean stabilized = hasItem(client, SnapshotItems.TRIPOD);
-            longExposure = new LongExposureAccumulator(title, capturedSettings, depthMap, liveFilmBaked,
+            longExposure = new LongExposureAccumulator(title, capturedSettings, depthMap, false,
                 stabilized, client.player.getYRot(), client.player.getXRot());
         } else {
-            pendingCapture = new CaptureRequest(title, capturedSettings, depthMap, liveFilmBaked,
+            pendingCapture = new CaptureRequest(title, capturedSettings, depthMap, false,
                 yawVelocity, pitchVelocity, capturedSettings.shutterSeconds(), 1, false);
         }
     }
 
     public static void captureRenderedFrame(RenderTarget renderTarget) {
-        if (!active || ShaderCompatibility.shadowPassActive()) {
+        Minecraft client = Minecraft.getInstance();
+        if (!active || !gameplayScreenAvailable(client) || ShaderCompatibility.shadowPassActive()) {
             return;
         }
         SnapshotDevSmokeTest.recordRenderedFrame();
-        Minecraft client = Minecraft.getInstance();
         if (panorama != null) {
             PanoramaSession session = panorama;
             if (session.ready()) {
                 session.markInFlight();
                 Screenshot.takeScreenshot(renderTarget, image -> {
-                    if (session != panorama) {
+                    if (session != panorama || !captureCallbackAllowed(client)) {
                         image.close();
                         return;
                     }
@@ -863,7 +1069,7 @@ public final class SnapshotCameraController {
             if (session.ready()) {
                 session.markInFlight();
                 Screenshot.takeScreenshot(renderTarget, image -> {
-                    if (session != focusStack) {
+                    if (session != focusStack || !captureCallbackAllowed(client)) {
                         image.close();
                         return;
                     }
@@ -877,10 +1083,36 @@ public final class SnapshotCameraController {
             }
             return;
         }
+        if (highResolution != null) {
+            HighResolutionSession session = highResolution;
+            if (session.ready()) {
+                session.markInFlight();
+                Screenshot.takeScreenshot(renderTarget, image -> {
+                    if (session != highResolution || !captureCallbackAllowed(client)) {
+                        image.close();
+                        return;
+                    }
+                    if (session.accept(client, image)) {
+                        finishHighResolution(client, session);
+                    } else if (client.player != null) {
+                        client.player.sendOverlayMessage(Component.literal(
+                            "Tiled 2X " + (session.frameIndex() + 1) + " / 4"
+                        ));
+                    }
+                });
+            }
+            return;
+        }
         if (pendingCapture != null) {
             CaptureRequest request = pendingCapture;
             pendingCapture = null;
-            Screenshot.takeScreenshot(renderTarget, image -> handleImage(client, image, request));
+            Screenshot.takeScreenshot(renderTarget, image -> {
+                if (!captureCallbackAllowed(client)) {
+                    image.close();
+                    return;
+                }
+                handleImage(client, image, request);
+            });
             return;
         }
 
@@ -890,6 +1122,10 @@ public final class SnapshotCameraController {
             if (session.shouldSample(now)) {
                 session.markSampleInFlight();
                 Screenshot.takeScreenshot(renderTarget, image -> {
+                    if (session != longExposure || !captureCallbackAllowed(client)) {
+                        image.close();
+                        return;
+                    }
                     session.accept(image);
                     if (session == longExposure && session.readyToFinish(System.nanoTime())) {
                         finishLongExposure(client, session);
@@ -908,7 +1144,9 @@ public final class SnapshotCameraController {
                 : renderTarget.width % 2 == 0 && renderTarget.height % 2 == 0 ? 2 : 1;
             Screenshot.takeScreenshot(renderTarget, factor, image -> {
                 try {
-                    exposureAnalysis = ExposureAnalysis.analyze(image);
+                    if (captureCallbackAllowed(client)) {
+                        exposureAnalysis = ExposureAnalysis.analyze(image);
+                    }
                 } finally {
                     image.close();
                     analysisInFlight = false;
@@ -957,6 +1195,37 @@ public final class SnapshotCameraController {
         handleImage(client, merged, request);
     }
 
+    private static void finishHighResolution(Minecraft client, HighResolutionSession session) {
+        if (session != highResolution) {
+            return;
+        }
+        highResolution = null;
+        NativeImage stitched;
+        try {
+            stitched = session.finishImage();
+        } catch (RuntimeException exception) {
+            session.releaseFrames();
+            SnapshotInit.LOGGER.error("[Snapshot] Tiled high-resolution stitching failed.", exception);
+            if (client.player != null) {
+                client.player.sendOverlayMessage(Component.literal(
+                    "Tiled 2X capture failed safely. Keep the window size fixed and try again."
+                ));
+            }
+            return;
+        } finally {
+            session.restore(client);
+        }
+        CaptureRequest request = new CaptureRequest(
+            session.title(), session.settings(), null, false, 0.0F, 0.0F,
+            session.settings().shutterSeconds(), 4, session.stabilized()
+        );
+        if (client.player != null) {
+            client.player.playSound(SoundEvents.CROSSBOW_LOADING_END.value(), 0.24F, 1.52F);
+            client.player.sendOverlayMessage(Component.literal("Tiled 2X capture stitched"));
+        }
+        handleImage(client, stitched, request);
+    }
+
     private static void finishLongExposure(Minecraft client, LongExposureAccumulator session) {
         if (session != longExposure) {
             return;
@@ -973,7 +1242,8 @@ public final class SnapshotCameraController {
         CameraSettings capturedSettings = request.settings();
         NativeImage output = image;
         try {
-            output = capturedSettings.captureTechnique() == CaptureTechnique.PANORAMA
+            output = (capturedSettings.captureTechnique() == CaptureTechnique.PANORAMA
+                || capturedSettings.captureTechnique() == CaptureTechnique.TILED_2X)
                 ? image : PhotoProcessor.cropToAspect(image, capturedSettings.aspectRatio());
             if (SnapshotConfig.get().pngExport && SnapshotConfig.get().rawStyleExport) {
                 writeSourceNegative(client, output, request.title());
@@ -1132,18 +1402,34 @@ public final class SnapshotCameraController {
         Path snapshotDir = screenshotDir.resolve("snapshot");
         Files.createDirectories(snapshotDir);
         Path snapshotImage = snapshotDir.resolve(title + ".png");
-        image.writeToFile(snapshotImage);
+        SnapshotCaptureStorage.writePng(image, snapshotImage);
 
         if (SnapshotConfig.get().rootScreenshotCopy) {
-            Files.createDirectories(screenshotDir);
-            Path rootImage = screenshotDir.resolve(title + ".png");
-            Files.copy(snapshotImage, rootImage, StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.createDirectories(screenshotDir);
+                Path rootImage = screenshotDir.resolve(title + ".png");
+                SnapshotCaptureStorage.copyPng(snapshotImage, rootImage);
+                if (!Files.isRegularFile(rootImage) || Files.size(rootImage) != Files.size(snapshotImage)) {
+                    throw new IOException("Root screenshot copy did not match the Snapshot PNG");
+                }
+            } catch (IOException exception) {
+                SnapshotInit.LOGGER.warn("[Snapshot] PNG saved to {}, but the root screenshots copy failed.",
+                    snapshotImage, exception);
+            }
         }
 
         if (SnapshotConfig.get().image2MapSidecar) {
-            writeImage2MapSidecar(snapshotImage, request.settings().printSize().width(), request.settings().printSize().height());
+            try {
+                writeImage2MapSidecar(snapshotImage, request.settings().printSize().width(), request.settings().printSize().height());
+            } catch (IOException exception) {
+                SnapshotInit.LOGGER.warn("[Snapshot] PNG saved, but its Image2Map helper could not be written.", exception);
+            }
         }
-        writeMetadataSidecar(client, snapshotImage, image.getWidth(), image.getHeight(), request);
+        try {
+            writeMetadataSidecar(client, snapshotImage, image.getWidth(), image.getHeight(), request);
+        } catch (IOException exception) {
+            SnapshotInit.LOGGER.warn("[Snapshot] PNG saved, but its metadata sidecar could not be written.", exception);
+        }
 
         return snapshotImage;
     }
@@ -1152,7 +1438,7 @@ public final class SnapshotCameraController {
         try {
             Path directory = client.gameDirectory.toPath().resolve("screenshots/snapshot");
             Files.createDirectories(directory);
-            image.writeToFile(directory.resolve(title + ".source.png"));
+            SnapshotCaptureStorage.writePng(image, directory.resolve(title + ".source.png"));
         } catch (IOException exception) {
             SnapshotInit.LOGGER.warn("[Snapshot] Could not export source negative for {}.", title, exception);
         }
@@ -1167,11 +1453,16 @@ public final class SnapshotCameraController {
             /image2map preview IMAGE_URL
             /image2map create %d %d dither IMAGE_URL
             """.formatted(imagePath.toAbsolutePath(), width, height);
-        Files.writeString(imagePath.resolveSibling(stripExtension(imagePath.getFileName().toString()) + ".image2map.txt"), text, StandardCharsets.UTF_8);
+        AtomicFiles.writeString(
+            imagePath.resolveSibling(stripExtension(imagePath.getFileName().toString()) + ".image2map.txt"),
+            text,
+            StandardCharsets.UTF_8
+        );
     }
 
     private static void handOffToImage2Map(Minecraft client, Path imagePath, PrintSize printSize) {
-        if (!SnapshotConfig.get().image2MapAuto || !FabricLoader.getInstance().isModLoaded("image2map")
+        if (printSize == PrintSize.ONE_BY_ONE || !SnapshotConfig.get().image2MapAuto
+            || !FabricLoader.getInstance().isModLoaded("image2map")
             || !client.hasSingleplayerServer() || client.player == null) {
             return;
         }
@@ -1186,8 +1477,11 @@ public final class SnapshotCameraController {
                     /image2map preview %s
                     /image2map create %d %d dither %s
                     """.formatted(url, printSize.width(), printSize.height(), url);
-                Files.writeString(imagePath.resolveSibling(stripExtension(imagePath.getFileName().toString())
-                    + ".image2map.txt"), text, StandardCharsets.UTF_8);
+                AtomicFiles.writeString(
+                    imagePath.resolveSibling(stripExtension(imagePath.getFileName().toString()) + ".image2map.txt"),
+                    text,
+                    StandardCharsets.UTF_8
+                );
             }
             client.player.sendOverlayMessage(Component.literal("Sent " + printSize.label() + " print directly to Image2Map."));
         } catch (IOException exception) {
@@ -1218,6 +1512,10 @@ public final class SnapshotCameraController {
         metadata.addProperty("minimum_auto_shutter", capturedSettings.minimumShutter());
         metadata.addProperty("exposure_bracket", capturedSettings.exposureBracket().label());
         metadata.addProperty("capture_technique", capturedSettings.captureTechnique().label());
+        metadata.addProperty("panorama_exposure_matched",
+            capturedSettings.captureTechnique() == CaptureTechnique.PANORAMA);
+        metadata.addProperty("tiled_high_resolution",
+            capturedSettings.captureTechnique() == CaptureTechnique.TILED_2X);
         metadata.addProperty("capture_exposure_bias_stops", capturedSettings.captureExposureBiasStops());
         metadata.addProperty("focal_length_mm", capturedSettings.focalLengthPrecise());
         metadata.addProperty("lens", capturedSettings.lens().label());
@@ -1235,6 +1533,8 @@ public final class SnapshotCameraController {
         metadata.addProperty("film_profile", capturedSettings.filmProfile().label());
         metadata.addProperty("live_film_baked", request.liveFilmBaked());
         metadata.addProperty("live_depth_optics_baked", request.liveFilmBaked());
+        metadata.addProperty("live_dof_render_scale_percent",
+            SnapshotConfig.get().halfResolutionDof && capturedSettings.preset() != OpticsPreset.SCREENSHOT_ULTRA ? 50 : 100);
         metadata.addProperty("aspect_ratio", capturedSettings.aspectRatio().label());
         metadata.addProperty("camera_roll_degrees", capturedSettings.rollDegrees());
         metadata.addProperty("mood", capturedSettings.mood().label());
@@ -1269,7 +1569,7 @@ public final class SnapshotCameraController {
         metadata.addProperty("favorite", false);
         metadata.addProperty("rating", 0);
         Path sidecar = imagePath.resolveSibling(stripExtension(imagePath.getFileName().toString()) + ".snapshot.json");
-        Files.writeString(sidecar, JSON.toJson(metadata), StandardCharsets.UTF_8);
+        AtomicFiles.writeString(sidecar, JSON.toJson(metadata), StandardCharsets.UTF_8);
         PhotographyJournal.record(client, metadata);
     }
 
@@ -1358,10 +1658,90 @@ public final class SnapshotCameraController {
     }
 
     private static boolean canUseCamera(Minecraft client) {
-        if (!SnapshotConfig.get().requireCamera || client.player == null || client.player.hasInfiniteMaterials()) {
+        if (privilegedViewfinderAccess || !SnapshotConfig.get().requireCamera
+            || client.player == null || client.player.hasInfiniteMaterials()) {
             return true;
         }
         return hasItem(client, SnapshotItems.CAMERA);
+    }
+
+    private static void toggleFromViewfinderKey(Minecraft client) {
+        if (active) {
+            close(client);
+            return;
+        }
+        if (client.player == null || !client.player.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER)) {
+            if (client.player == null) {
+                return;
+            }
+            client.player.sendOverlayMessage(Component.translatable("message.snapshot.use_camera"));
+            return;
+        }
+        open(client, true);
+    }
+
+    private static boolean gameplayScreenAvailable(Minecraft client) {
+        return client.gui.screen() == null;
+    }
+
+    private static boolean cameraControlScreenOpen(Minecraft client) {
+        return client.gui.screen() instanceof CameraQuickMenuScreen
+            || client.gui.screen() instanceof FocusPointSelectorScreen;
+    }
+
+    private static boolean captureCallbackAllowed(Minecraft client) {
+        return active && client.player != null && client.level != null && gameplayScreenAvailable(client);
+    }
+
+    private static void cancelCaptureOperations(Minecraft client) {
+        pendingBurstShots = 0;
+        pendingCapture = null;
+        if (longExposure != null && longExposure.stabilized() && client.player != null) {
+            client.player.setYRot(longExposure.lockedYaw());
+            client.player.setXRot(longExposure.lockedPitch());
+        }
+        longExposure = null;
+        if (panorama != null) {
+            panorama.close(client);
+            panorama = null;
+        }
+        if (focusStack != null) {
+            focusStack.close(client);
+            focusStack = null;
+        }
+        if (highResolution != null) {
+            HighResolutionSession session = highResolution;
+            highResolution = null;
+            session.close(client);
+        }
+        stopIntervalometer();
+        analysisRequested = false;
+    }
+
+    private static void cancelActiveCapture(Minecraft client) {
+        if (!captureInProgress()) {
+            return;
+        }
+        cancelCaptureOperations(client);
+        if (client.player != null) {
+            client.player.playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.18F, 0.72F);
+            client.player.sendOverlayMessage(Component.literal("Snapshot capture cancelled"));
+        }
+    }
+
+    private static void handleRollResetChord(Minecraft client) {
+        boolean controlDown = InputConstants.isKeyDown(client.getWindow(), InputConstants.KEY_LCONTROL)
+            || InputConstants.isKeyDown(client.getWindow(), InputConstants.KEY_RCONTROL);
+        boolean pressed = controlDown && InputConstants.isKeyDown(client.getWindow(), InputConstants.KEY_0);
+        if (pressed && !rollResetChordHeld) {
+            SETTINGS.resetRoll();
+            SETTINGS.select(CameraControl.CAMERA_ROLL);
+            playAdjustmentSound(client, 1.0F);
+            if (client.player != null) {
+                client.player.sendOverlayMessage(Component.literal("Camera roll reset to 0.0deg"));
+            }
+        }
+        rollResetChordHeld = pressed;
     }
 
     private static boolean hasItem(Minecraft client, Item item) {
@@ -1386,7 +1766,8 @@ public final class SnapshotCameraController {
         if (!active) {
             return;
         }
-        double target = SETTINGS.targetFov() * lensBreathingScale();
+        double target = highResolution == null
+            ? SETTINGS.targetFov() * lensBreathingScale() : highResolution.tileFov();
         currentFov = immediate ? target : Mth.lerp(0.22, currentFov, target);
     }
 
@@ -1519,9 +1900,10 @@ public final class SnapshotCameraController {
         }
 
         private static void compositeFrame(NativeImage output, NativeImage frame, int offsetX, int overlap) {
+            double exposureGain = overlap > 0 ? overlapExposureGain(output, frame, offsetX, overlap) : 1.0;
             for (int y = 0; y < frame.getHeight(); y++) {
                 for (int x = 0; x < frame.getWidth(); x++) {
-                    int source = frame.getPixel(x, y);
+                    int source = applyExposureGain(frame.getPixel(x, y), exposureGain);
                     int outputX = offsetX + x;
                     if (overlap > 0 && x < overlap) {
                         double linear = (x + 1.0) / (overlap + 1.0);
@@ -1531,6 +1913,44 @@ public final class SnapshotCameraController {
                     output.setPixel(outputX, y, source);
                 }
             }
+        }
+
+        private static double overlapExposureGain(NativeImage output, NativeImage frame, int offsetX, int overlap) {
+            double existingLuminance = 0.0;
+            double incomingLuminance = 0.0;
+            int samples = 0;
+            int stepX = Math.max(1, overlap / 96);
+            int stepY = Math.max(1, frame.getHeight() / 96);
+            for (int y = 0; y < frame.getHeight(); y += stepY) {
+                for (int x = 0; x < overlap; x += stepX) {
+                    int existing = output.getPixel(offsetX + x, y);
+                    int incoming = frame.getPixel(x, y);
+                    existingLuminance += pixelLuminance(existing);
+                    incomingLuminance += pixelLuminance(incoming);
+                    samples++;
+                }
+            }
+            if (samples == 0 || incomingLuminance <= 1.0) {
+                return 1.0;
+            }
+            return Mth.clamp(existingLuminance / incomingLuminance, 0.72, 1.38);
+        }
+
+        private static int applyExposureGain(int pixel, double gain) {
+            if (Math.abs(gain - 1.0) < 0.002) {
+                return pixel;
+            }
+            int alpha = (pixel >>> 24) & 0xFF;
+            int red = Mth.clamp((int) Math.round(((pixel >> 16) & 0xFF) * gain), 0, 255);
+            int green = Mth.clamp((int) Math.round(((pixel >> 8) & 0xFF) * gain), 0, 255);
+            int blue = Mth.clamp((int) Math.round((pixel & 0xFF) * gain), 0, 255);
+            return (alpha << 24) | (red << 16) | (green << 8) | blue;
+        }
+
+        private static double pixelLuminance(int pixel) {
+            return ((pixel >> 16) & 0xFF) * 0.2126
+                + ((pixel >> 8) & 0xFF) * 0.7152
+                + (pixel & 0xFF) * 0.0722;
         }
 
         private static int blendPixel(int first, int second, double amount) {
@@ -1586,6 +2006,392 @@ public final class SnapshotCameraController {
 
         private int frameIndex() {
             return frameIndex;
+        }
+    }
+
+    private static final class HighResolutionSession {
+        private static final double TILE_COVERAGE = 0.64;
+        private static final double TILE_CENTER_OFFSET = 0.36;
+        private static final double STITCH_OVERLAP = 0.20;
+        private static final int[] YAW_SIGNS = {1, -1, 1, -1};
+        private static final int[] PITCH_SIGNS = {-1, -1, 1, 1};
+
+        private final String title;
+        private final CameraSettings settings;
+        private final float baseYaw;
+        private final float basePitch;
+        private final boolean stabilized;
+        private final double tileFov;
+        private final double yawOffset;
+        private final double pitchOffset;
+        private final double fullHalfVertical;
+        private final double fullHalfHorizontal;
+        private final double tileHalfVertical;
+        private final double tileHalfHorizontal;
+        private final double[] rightX = new double[4];
+        private final double[] rightY = new double[4];
+        private final double[] rightZ = new double[4];
+        private final double[] upX = new double[4];
+        private final double[] upY = new double[4];
+        private final double[] upZ = new double[4];
+        private final double[] forwardX = new double[4];
+        private final double[] forwardY = new double[4];
+        private final double[] forwardZ = new double[4];
+        private final NativeImage[] frames = new NativeImage[4];
+        private int frameIndex;
+        private int settleTicks;
+        private boolean inFlight;
+
+        private HighResolutionSession(String title, CameraSettings settings, float baseYaw, float basePitch,
+                                      double aspectRatio, boolean stabilized) {
+            this.title = title;
+            this.settings = settings;
+            this.baseYaw = baseYaw;
+            this.basePitch = basePitch;
+            this.stabilized = stabilized;
+
+            double safeAspect = Math.max(0.1, aspectRatio);
+            fullHalfVertical = Math.tan(Math.toRadians(settings.targetFov()) * 0.5);
+            fullHalfHorizontal = fullHalfVertical * safeAspect;
+            tileHalfVertical = fullHalfVertical * TILE_COVERAGE;
+            tileHalfHorizontal = tileHalfVertical * safeAspect;
+            tileFov = Math.toDegrees(2.0 * Math.atan(tileHalfVertical));
+            pitchOffset = Math.toDegrees(Math.atan(fullHalfVertical * TILE_CENTER_OFFSET));
+            yawOffset = Math.toDegrees(Math.atan(fullHalfHorizontal * TILE_CENTER_OFFSET));
+            prepareTileBasis();
+        }
+
+        private void prepareTileBasis() {
+            double[][] base = cameraBasis(baseYaw, basePitch, settings.rollDegrees());
+            for (int index = 0; index < frames.length; index++) {
+                double[][] tile = cameraBasis(
+                    baseYaw + YAW_SIGNS[index] * yawOffset,
+                    basePitch + PITCH_SIGNS[index] * pitchOffset,
+                    settings.rollDegrees()
+                );
+                rightX[index] = dot(base[0], tile[0]);
+                rightY[index] = dot(base[1], tile[0]);
+                rightZ[index] = dot(base[2], tile[0]);
+                upX[index] = dot(base[0], tile[1]);
+                upY[index] = dot(base[1], tile[1]);
+                upZ[index] = dot(base[2], tile[1]);
+                forwardX[index] = dot(base[0], tile[2]);
+                forwardY[index] = dot(base[1], tile[2]);
+                forwardZ[index] = dot(base[2], tile[2]);
+            }
+        }
+
+        private static double[][] cameraBasis(double yawDegrees, double pitchDegrees, double rollDegrees) {
+            double yaw = Math.toRadians(yawDegrees);
+            double pitch = Math.toRadians(pitchDegrees);
+            double sinYaw = Math.sin(yaw);
+            double cosYaw = Math.cos(yaw);
+            double sinPitch = Math.sin(pitch);
+            double cosPitch = Math.cos(pitch);
+            double[] right = {cosYaw, 0.0, sinYaw};
+            double[] up = {-sinPitch * sinYaw, cosPitch, sinPitch * cosYaw};
+            double[] forward = {-sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch};
+            double roll = Math.toRadians(rollDegrees);
+            double cosRoll = Math.cos(roll);
+            double sinRoll = Math.sin(roll);
+            double[] rolledRight = {
+                right[0] * cosRoll + up[0] * sinRoll,
+                right[1] * cosRoll + up[1] * sinRoll,
+                right[2] * cosRoll + up[2] * sinRoll
+            };
+            double[] rolledUp = {
+                up[0] * cosRoll - right[0] * sinRoll,
+                up[1] * cosRoll - right[1] * sinRoll,
+                up[2] * cosRoll - right[2] * sinRoll
+            };
+            return new double[][]{rolledRight, rolledUp, forward};
+        }
+
+        private static double dot(double[] first, double[] second) {
+            return first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+        }
+
+        private void begin(Minecraft client) {
+            settleTicks = 5;
+            applyPose(client);
+            applyFov(client, true);
+        }
+
+        private void tick(Minecraft client) {
+            applyPose(client);
+            if (settleTicks > 0) {
+                settleTicks--;
+            }
+        }
+
+        private boolean ready() {
+            return settleTicks == 0 && !inFlight && frameIndex < frames.length;
+        }
+
+        private void markInFlight() {
+            inFlight = true;
+        }
+
+        private boolean accept(Minecraft client, NativeImage image) {
+            inFlight = false;
+            frames[frameIndex++] = image;
+            if (frameIndex >= frames.length) {
+                return true;
+            }
+            settleTicks = 5;
+            applyPose(client);
+            return false;
+        }
+
+        private void applyPose(Minecraft client) {
+            if (client.player == null || frameIndex >= frames.length) {
+                return;
+            }
+            client.player.setYRot((float) (baseYaw + YAW_SIGNS[frameIndex] * yawOffset));
+            client.player.setXRot((float) Mth.clamp(
+                basePitch + PITCH_SIGNS[frameIndex] * pitchOffset, -89.9, 89.9
+            ));
+        }
+
+        private NativeImage finishImage() {
+            if (frameIndex != frames.length) {
+                throw new IllegalStateException("Tiled capture ended before all frames were captured");
+            }
+            int frameWidth = frames[0].getWidth();
+            int frameHeight = frames[0].getHeight();
+            for (NativeImage frame : frames) {
+                if (frame.getWidth() != frameWidth || frame.getHeight() != frameHeight) {
+                    throw new IllegalStateException("Tiled capture frame dimensions changed during capture");
+                }
+            }
+
+            int overlapX = Math.max(2, (int) Math.round(frameWidth * STITCH_OVERLAP));
+            int overlapY = Math.max(2, (int) Math.round(frameHeight * STITCH_OVERLAP));
+            int stepX = frameWidth - overlapX;
+            int stepY = frameHeight - overlapY;
+            NativeImage stitched = new NativeImage(frameWidth + stepX, frameHeight + stepY, false);
+            try {
+                double[] gains = exposureGains(frameWidth, frameHeight);
+                composite(stitched, frameWidth, frameHeight, gains);
+                return stitched;
+            } catch (RuntimeException exception) {
+                stitched.close();
+                throw exception;
+            } finally {
+                releaseFrames();
+            }
+        }
+
+        private double[] exposureGains(int frameWidth, int frameHeight) {
+            double[] gains = {1.0, 1.0, 1.0, 1.0};
+            gains[1] = matchedExposureGain(0, gains[0], 1, frameWidth, frameHeight);
+            gains[2] = matchedExposureGain(0, gains[0], 2, frameWidth, frameHeight);
+            double fromTop = matchedExposureGain(1, gains[1], 3, frameWidth, frameHeight);
+            double fromLeft = matchedExposureGain(2, gains[2], 3, frameWidth, frameHeight);
+            gains[3] = Mth.clamp(Math.sqrt(fromTop * fromLeft), 0.72, 1.38);
+            return gains;
+        }
+
+        private double matchedExposureGain(int referenceIndex, double referenceGain, int incomingIndex,
+                                           int frameWidth, int frameHeight) {
+            double referenceLuminance = 0.0;
+            double incomingLuminance = 0.0;
+            int samples = 0;
+            double[] referenceProjection = new double[3];
+            double[] incomingProjection = new double[3];
+            for (int y = 0; y < 72; y++) {
+                double rayY = (1.0 - (y + 0.5) / 72.0 * 2.0) * fullHalfVertical;
+                for (int x = 0; x < 128; x++) {
+                    double rayX = ((x + 0.5) / 128.0 * 2.0 - 1.0) * fullHalfHorizontal;
+                    if (!project(referenceIndex, rayX, rayY, referenceProjection)
+                        || !project(incomingIndex, rayX, rayY, incomingProjection)
+                        || referenceProjection[2] < 0.015 || incomingProjection[2] < 0.015) {
+                        continue;
+                    }
+                    int referencePixel = nearestPixel(frames[referenceIndex], referenceProjection,
+                        frameWidth, frameHeight);
+                    int incomingPixel = nearestPixel(frames[incomingIndex], incomingProjection,
+                        frameWidth, frameHeight);
+                    referenceLuminance += PanoramaSession.pixelLuminance(referencePixel) * referenceGain;
+                    incomingLuminance += PanoramaSession.pixelLuminance(incomingPixel);
+                    samples++;
+                }
+            }
+            if (samples == 0 || incomingLuminance <= 1.0) {
+                return 1.0;
+            }
+            return Mth.clamp(referenceLuminance / incomingLuminance, 0.72, 1.38);
+        }
+
+        private void composite(NativeImage output, int frameWidth, int frameHeight, double[] gains) {
+            for (int outputY = 0; outputY < output.getHeight(); outputY++) {
+                double rayY = (1.0 - (outputY + 0.5) / output.getHeight() * 2.0) * fullHalfVertical;
+                for (int outputX = 0; outputX < output.getWidth(); outputX++) {
+                    double rayX = ((outputX + 0.5) / output.getWidth() * 2.0 - 1.0) * fullHalfHorizontal;
+                    double alpha = 0.0;
+                    double red = 0.0;
+                    double green = 0.0;
+                    double blue = 0.0;
+                    double totalWeight = 0.0;
+                    for (int index = 0; index < frames.length; index++) {
+                        double localX = rayX * rightX[index] + rayY * rightY[index] + rightZ[index];
+                        double localY = rayX * upX[index] + rayY * upY[index] + upZ[index];
+                        double localZ = rayX * forwardX[index] + rayY * forwardY[index] + forwardZ[index];
+                        if (localZ <= 0.0) {
+                            continue;
+                        }
+                        double screenX = localX / (localZ * tileHalfHorizontal);
+                        double screenY = localY / (localZ * tileHalfVertical);
+                        if (Math.abs(screenX) > 1.0 || Math.abs(screenY) > 1.0) {
+                            continue;
+                        }
+                        double weight = projectionWeight(screenX, screenY);
+                        double sourceX = (screenX * 0.5 + 0.5) * (frameWidth - 1);
+                        double sourceY = (0.5 - screenY * 0.5) * (frameHeight - 1);
+                        int x0 = Mth.clamp((int) Math.floor(sourceX), 0, frameWidth - 1);
+                        int y0 = Mth.clamp((int) Math.floor(sourceY), 0, frameHeight - 1);
+                        int x1 = Math.min(frameWidth - 1, x0 + 1);
+                        int y1 = Math.min(frameHeight - 1, y0 + 1);
+                        double fractionX = sourceX - x0;
+                        double fractionY = sourceY - y0;
+                        int first = frames[index].getPixel(x0, y0);
+                        int second = frames[index].getPixel(x1, y0);
+                        int third = frames[index].getPixel(x0, y1);
+                        int fourth = frames[index].getPixel(x1, y1);
+                        alpha += bilinearChannel(first, second, third, fourth, 24, fractionX, fractionY) * weight;
+                        red += bilinearChannel(first, second, third, fourth, 16, fractionX, fractionY)
+                            * gains[index] * weight;
+                        green += bilinearChannel(first, second, third, fourth, 8, fractionX, fractionY)
+                            * gains[index] * weight;
+                        blue += bilinearChannel(first, second, third, fourth, 0, fractionX, fractionY)
+                            * gains[index] * weight;
+                        totalWeight += weight;
+                    }
+                    if (totalWeight <= 0.0) {
+                        output.setPixel(outputX, outputY,
+                            nearestTilePixel(rayX, rayY, frameWidth, frameHeight, gains));
+                        continue;
+                    }
+                    int outputPixel = (channel(alpha / totalWeight) << 24)
+                        | (channel(red / totalWeight) << 16)
+                        | (channel(green / totalWeight) << 8)
+                        | channel(blue / totalWeight);
+                    output.setPixel(outputX, outputY, outputPixel);
+                }
+            }
+        }
+
+        private int nearestTilePixel(double rayX, double rayY, int frameWidth, int frameHeight, double[] gains) {
+            int nearestIndex = 0;
+            double nearestScreenX = 0.0;
+            double nearestScreenY = 0.0;
+            double nearestDistance = Double.POSITIVE_INFINITY;
+            for (int index = 0; index < frames.length; index++) {
+                double localX = rayX * rightX[index] + rayY * rightY[index] + rightZ[index];
+                double localY = rayX * upX[index] + rayY * upY[index] + upZ[index];
+                double localZ = rayX * forwardX[index] + rayY * forwardY[index] + forwardZ[index];
+                if (localZ <= 0.0) {
+                    continue;
+                }
+                double screenX = localX / (localZ * tileHalfHorizontal);
+                double screenY = localY / (localZ * tileHalfVertical);
+                double distance = Math.max(Math.abs(screenX), Math.abs(screenY));
+                if (distance < nearestDistance) {
+                    nearestIndex = index;
+                    nearestScreenX = screenX;
+                    nearestScreenY = screenY;
+                    nearestDistance = distance;
+                }
+            }
+            int sourceX = Mth.clamp((int) Math.round((Mth.clamp(nearestScreenX, -1.0, 1.0) * 0.5 + 0.5)
+                * (frameWidth - 1)), 0, frameWidth - 1);
+            int sourceY = Mth.clamp((int) Math.round((0.5 - Mth.clamp(nearestScreenY, -1.0, 1.0) * 0.5)
+                * (frameHeight - 1)), 0, frameHeight - 1);
+            return PanoramaSession.applyExposureGain(frames[nearestIndex].getPixel(sourceX, sourceY), gains[nearestIndex]);
+        }
+
+        private boolean project(int index, double rayX, double rayY, double[] output) {
+            double localX = rayX * rightX[index] + rayY * rightY[index] + rightZ[index];
+            double localY = rayX * upX[index] + rayY * upY[index] + upZ[index];
+            double localZ = rayX * forwardX[index] + rayY * forwardY[index] + forwardZ[index];
+            if (localZ <= 0.0) {
+                return false;
+            }
+            double screenX = localX / (localZ * tileHalfHorizontal);
+            double screenY = localY / (localZ * tileHalfVertical);
+            if (Math.abs(screenX) > 1.0 || Math.abs(screenY) > 1.0) {
+                return false;
+            }
+            output[0] = screenX * 0.5 + 0.5;
+            output[1] = 0.5 - screenY * 0.5;
+            output[2] = projectionWeight(screenX, screenY);
+            return true;
+        }
+
+        private static int nearestPixel(NativeImage image, double[] projection, int width, int height) {
+            int x = Mth.clamp((int) Math.round(projection[0] * (width - 1)), 0, width - 1);
+            int y = Mth.clamp((int) Math.round(projection[1] * (height - 1)), 0, height - 1);
+            return image.getPixel(x, y);
+        }
+
+        private static double projectionWeight(double screenX, double screenY) {
+            double edge = Math.max(0.001, (1.0 - screenX * screenX) * (1.0 - screenY * screenY));
+            return edge * edge;
+        }
+
+        private static double bilinearChannel(int first, int second, int third, int fourth,
+                                              int shift, double fractionX, double fractionY) {
+            double top = ((first >> shift) & 0xFF) * (1.0 - fractionX)
+                + ((second >> shift) & 0xFF) * fractionX;
+            double bottom = ((third >> shift) & 0xFF) * (1.0 - fractionX)
+                + ((fourth >> shift) & 0xFF) * fractionX;
+            return top * (1.0 - fractionY) + bottom * fractionY;
+        }
+
+        private static int channel(double value) {
+            return Mth.clamp((int) Math.round(value), 0, 255);
+        }
+
+        private void restore(Minecraft client) {
+            if (client.player != null) {
+                client.player.setYRot(baseYaw);
+                client.player.setXRot(basePitch);
+            }
+            applyFov(client, true);
+        }
+
+        private void close(Minecraft client) {
+            restore(client);
+            releaseFrames();
+        }
+
+        private void releaseFrames() {
+            for (int index = 0; index < frames.length; index++) {
+                if (frames[index] != null) {
+                    frames[index].close();
+                    frames[index] = null;
+                }
+            }
+        }
+
+        private String title() {
+            return title;
+        }
+
+        private CameraSettings settings() {
+            return settings;
+        }
+
+        private boolean stabilized() {
+            return stabilized;
+        }
+
+        private int frameIndex() {
+            return frameIndex;
+        }
+
+        private double tileFov() {
+            return tileFov;
         }
     }
 

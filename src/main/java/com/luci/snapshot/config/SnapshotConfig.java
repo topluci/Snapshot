@@ -29,6 +29,16 @@ public final class SnapshotConfig {
         new ConfigSpec("optics.default_preset", "Default preset", "Optics", "ultra", 0.0D, 0.0D, false),
         new ConfigSpec("optics.shader_compat", "Shader compatibility", "Optics", "true", 0.0D, 1.0D, false),
         new ConfigSpec("optics.live_film_pipeline", "Live film processing", "Optics", "true", 0.0D, 1.0D, false),
+        new ConfigSpec("optics.half_resolution_dof", "Half-resolution live DoF", "Optics", "true", 0.0D, 1.0D, false),
+        new ConfigSpec("optics.adaptive_dof", "Adaptive live DoF", "Optics", "true", 0.0D, 1.0D, false),
+        new ConfigSpec("optics.target_fps", "Adaptive DoF target FPS", "Optics", "60", 30.0D, 240.0D, false),
+        new ConfigSpec("optics.depth_temporal_stability", "Depth stability", "Optics", "70", 0.0D, 100.0D, false),
+        new ConfigSpec("accessibility.focus_peaking_strength", "Focus peaking strength", "Accessibility", "75", 0.0D, 100.0D, false),
+        new ConfigSpec("accessibility.focus_peaking_palette", "Focus peaking palette", "Accessibility", "0", 0.0D, 3.0D, false),
+        new ConfigSpec("accessibility.false_color_palette", "False colour palette", "Accessibility", "0", 0.0D, 3.0D, false),
+        new ConfigSpec("accessibility.hud_opacity", "HUD opacity", "Accessibility", "100", 25.0D, 100.0D, false),
+        new ConfigSpec("accessibility.hud_scale", "HUD scale", "Accessibility", "100", 75.0D, 150.0D, false),
+        new ConfigSpec("accessibility.controller_support", "Controller support", "Accessibility", "true", 0.0D, 1.0D, false),
         new ConfigSpec("atmosphere.viewfinder_particles", "Viewfinder particles", "Atmosphere", "true", 0.0D, 1.0D, false),
         new ConfigSpec("atmosphere.acoustic_isolation", "Acoustic isolation", "Atmosphere", "true", 0.0D, 1.0D, false),
         new ConfigSpec("environment.client_preview", "Environment preview", "Environment", "true", 0.0D, 1.0D, false),
@@ -53,6 +63,16 @@ public final class SnapshotConfig {
     public final String defaultPreset;
     public final boolean shaderCompat;
     public final boolean liveFilmPipeline;
+    public final boolean halfResolutionDof;
+    public final boolean adaptiveDof;
+    public final int targetFps;
+    public final int depthTemporalStability;
+    public final int focusPeakingStrength;
+    public final int focusPeakingPalette;
+    public final int falseColorPalette;
+    public final int hudOpacity;
+    public final int hudScale;
+    public final boolean controllerSupport;
     public final boolean viewfinderParticles;
     public final boolean acousticIsolation;
     public final boolean environmentPreview;
@@ -75,6 +95,16 @@ public final class SnapshotConfig {
         defaultPreset = readPreset(properties, "optics.default_preset", "ultra");
         shaderCompat = readBoolean(properties, "optics.shader_compat", true);
         liveFilmPipeline = readBoolean(properties, "optics.live_film_pipeline", true);
+        halfResolutionDof = readBoolean(properties, "optics.half_resolution_dof", true);
+        adaptiveDof = readBoolean(properties, "optics.adaptive_dof", true);
+        targetFps = readInt(properties, "optics.target_fps", 60, 30, 240);
+        depthTemporalStability = readInt(properties, "optics.depth_temporal_stability", 70, 0, 100);
+        focusPeakingStrength = readInt(properties, "accessibility.focus_peaking_strength", 75, 0, 100);
+        focusPeakingPalette = readInt(properties, "accessibility.focus_peaking_palette", 0, 0, 3);
+        falseColorPalette = readInt(properties, "accessibility.false_color_palette", 0, 0, 3);
+        hudOpacity = readInt(properties, "accessibility.hud_opacity", 100, 25, 100);
+        hudScale = readInt(properties, "accessibility.hud_scale", 100, 75, 150);
+        controllerSupport = readBoolean(properties, "accessibility.controller_support", true);
         viewfinderParticles = readBoolean(properties, "atmosphere.viewfinder_particles", true);
         acousticIsolation = readBoolean(properties, "atmosphere.acoustic_isolation", true);
         environmentPreview = readBoolean(properties, "environment.client_preview", true);
@@ -150,6 +180,16 @@ public final class SnapshotConfig {
         properties.setProperty("optics.default_preset", config.defaultPreset);
         properties.setProperty("optics.shader_compat", Boolean.toString(config.shaderCompat));
         properties.setProperty("optics.live_film_pipeline", Boolean.toString(config.liveFilmPipeline));
+        properties.setProperty("optics.half_resolution_dof", Boolean.toString(config.halfResolutionDof));
+        properties.setProperty("optics.adaptive_dof", Boolean.toString(config.adaptiveDof));
+        properties.setProperty("optics.target_fps", Integer.toString(config.targetFps));
+        properties.setProperty("optics.depth_temporal_stability", Integer.toString(config.depthTemporalStability));
+        properties.setProperty("accessibility.focus_peaking_strength", Integer.toString(config.focusPeakingStrength));
+        properties.setProperty("accessibility.focus_peaking_palette", Integer.toString(config.focusPeakingPalette));
+        properties.setProperty("accessibility.false_color_palette", Integer.toString(config.falseColorPalette));
+        properties.setProperty("accessibility.hud_opacity", Integer.toString(config.hudOpacity));
+        properties.setProperty("accessibility.hud_scale", Integer.toString(config.hudScale));
+        properties.setProperty("accessibility.controller_support", Boolean.toString(config.controllerSupport));
         properties.setProperty("atmosphere.viewfinder_particles", Boolean.toString(config.viewfinderParticles));
         properties.setProperty("atmosphere.acoustic_isolation", Boolean.toString(config.acousticIsolation));
         properties.setProperty("environment.client_preview", Boolean.toString(config.environmentPreview));

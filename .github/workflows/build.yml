@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit, resource, and JAR checks
+        run: ./scripts/package-release.sh
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-${{ github.sha }}
+          path: |
+            build/libs/snapshot-*.jar
+            !build/libs/*-sources.jar
+            build/libs/SHA256SUMS.txt
+          if-no-files-found: error

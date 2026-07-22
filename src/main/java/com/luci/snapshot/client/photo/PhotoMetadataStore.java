@@ -5,10 +5,13 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.luci.snapshot.SnapshotInit;
+import com.luci.snapshot.util.AtomicFiles;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
+import java.util.List;
 
 final class PhotoMetadataStore {
     private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
@@ -67,8 +70,13 @@ final class PhotoMetadataStore {
         String base = stripExtension(image.getFileName().toString());
         try {
             Files.deleteIfExists(image);
+            Files.deleteIfExists(image.resolveSibling(base + ".source.png"));
+            if (base.endsWith("_HDR")) {
+                Files.deleteIfExists(image.resolveSibling(base.substring(0, base.length() - 4) + ".source.png"));
+            }
             Files.deleteIfExists(image.resolveSibling(base + ".snapshot.json"));
             Files.deleteIfExists(image.resolveSibling(base + ".image2map.txt"));
+            SnapshotTextureLoader.deleteCached(image);
             Path screenshots = image.getParent() == null ? null : image.getParent().getParent();
             if (screenshots != null) {
                 Files.deleteIfExists(screenshots.resolve(image.getFileName()));
@@ -78,9 +86,15 @@ final class PhotoMetadataStore {
         }
     }
 
+    static void deleteAll(Collection<Path> images) {
+        for (Path image : List.copyOf(images)) {
+            delete(image);
+        }
+    }
+
     private static void write(Path image, JsonObject metadata) {
         try {
-            Files.writeString(sidecar(image), JSON.toJson(metadata), StandardCharsets.UTF_8);
+            AtomicFiles.writeString(sidecar(image), JSON.toJson(metadata), StandardCharsets.UTF_8);
         } catch (IOException exception) {
             SnapshotInit.LOGGER.warn("[Snapshot] Could not update photo metadata for {}.", image, exception);
         }

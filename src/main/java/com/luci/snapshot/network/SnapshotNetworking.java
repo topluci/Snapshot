@@ -1,6 +1,7 @@
 package com.luci.snapshot.network;
 
 import com.luci.snapshot.config.SnapshotConfig;
+import com.luci.snapshot.item.PhotographData;
 import com.luci.snapshot.item.SnapshotItems;
 import java.util.List;
 import java.util.Locale;
@@ -53,14 +54,15 @@ public final class SnapshotNetworking {
             return;
         }
 
-        ItemStack mapPhoto = SnapshotMapPhotos.create(player, payload);
+        SnapshotMapPhotos.CreatedMap mapPhoto = SnapshotMapPhotos.create(player, payload);
         if (SnapshotConfig.get().mapPhotos) {
-            giveOrDrop(player, mapPhoto);
+            giveOrDrop(player, mapPhoto.stack());
         }
 
         if (SnapshotConfig.get().serverPhotos) {
-            giveOrDrop(player, createPhotograph(payload, mapPhoto.get(DataComponents.MAP_ID)));
+            giveOrDrop(player, createPhotograph(payload, mapPhoto.mapId(), mapPhoto.colors()));
         }
+        SnapshotMapPhotos.syncTo(player, mapPhoto);
         player.sendOverlayMessage(Component.literal("Snapshot captured: " + payload.title()));
     }
 
@@ -96,11 +98,12 @@ public final class SnapshotNetworking {
         return false;
     }
 
-    private static ItemStack createPhotograph(CapturePhotoPayload payload, MapId mapId) {
+    private static ItemStack createPhotograph(CapturePhotoPayload payload, MapId mapId, byte[] colors) {
         ItemStack stack = new ItemStack(SnapshotItems.PHOTOGRAPH);
         if (mapId != null) {
             stack.set(DataComponents.MAP_ID, mapId);
         }
+        PhotographData.apply(stack, payload.title(), colors);
         stack.set(DataComponents.CUSTOM_NAME, Component.literal(payload.title() + " - Photograph"));
         List<Component> lore = new java.util.ArrayList<>(List.of(
             Component.literal(payload.width() + "x" + payload.height() + " source"),
@@ -122,7 +125,9 @@ public final class SnapshotNetworking {
 
     public static int applyEnvironment(MinecraftServer server, ServerPlayer player, String preset, boolean fromClient) {
         if (fromClient && !canApplyEnvironment(server, player)) {
-            player.sendOverlayMessage(Component.literal("Snapshot environment changes require operator permission."));
+            player.sendOverlayMessage(Component.literal(
+                "Snapshot environment changes require Creative mode or cheats/operator permission."
+            ));
             return 0;
         }
 
@@ -155,8 +160,9 @@ public final class SnapshotNetworking {
 
     private static boolean canApplyEnvironment(MinecraftServer server, ServerPlayer player) {
         NameAndId nameAndId = new NameAndId(player.getGameProfile());
-        return server.isSingleplayerOwner(nameAndId)
-            || server.getProfilePermissions(nameAndId).level().isEqualOrHigherThan(permissionForLevel(SnapshotConfig.get().environmentPermissionLevel));
+        int configuredLevel = Math.max(2, SnapshotConfig.get().environmentPermissionLevel);
+        return player.hasInfiniteMaterials()
+            || server.getProfilePermissions(nameAndId).level().isEqualOrHigherThan(permissionForLevel(configuredLevel));
     }
 
     static PermissionLevel permissionForLevel(int level) {

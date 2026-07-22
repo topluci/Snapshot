@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 ./gradlew clean build --console=plain
 
-for test_case in suite clock image2map ui astro2 items access controls performance; do
+for test_case in suite clock image2map ui astro2 items access controls calibration performance highres; do
     ./gradlew snapshotSmokeTest \
         -PsnapshotSmokeCase="$test_case" \
         -PsnapshotSmokeWorld="${SNAPSHOT_SMOKE_WORLD:-New World}" \

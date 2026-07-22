@@ -27,6 +27,9 @@ class SnapshotResourceIntegrityTest {
     private static final Path SOURCES = ROOT.resolve("src/main/java");
     private static final List<Path> RELEASE_DOCUMENTS = List.of(
         ROOT.resolve("README.md"),
+        ROOT.resolve("CHANGELOG.md"),
+        ROOT.resolve("MODRINTH_CHANGELOG.md"),
+        ROOT.resolve("PUBLISHING.md"),
         ROOT.resolve("docs/FEATURE_STATUS.md")
     );
 
@@ -50,6 +53,11 @@ class SnapshotResourceIntegrityTest {
         assertEquals("LicenseRef-All-Rights-Reserved", metadata.get("license").getAsString());
         assertEquals(1, metadata.getAsJsonArray("authors").size());
         assertEquals("luci", metadata.getAsJsonArray("authors").get(0).getAsString());
+
+        JsonObject contact = metadata.getAsJsonObject("contact");
+        assertNotNull(contact);
+        assertEquals("https://modrinth.com/project/snapshotphoto", contact.get("homepage").getAsString());
+        assertEquals("https://github.com/topluci/Snapshot/issues", contact.get("issues").getAsString());
 
         JsonObject dependencies = metadata.getAsJsonObject("depends");
         assertEquals("26.2", dependencies.get("minecraft").getAsString());
@@ -169,6 +177,10 @@ class SnapshotResourceIntegrityTest {
 
         String fontLicense = Files.readString(ROOT.resolve("FONT_LICENSE.md"), StandardCharsets.UTF_8);
         assertTrue(fontLicense.startsWith("Copyright 2014-2021 Adobe"));
+
+        assertTrue(Files.isRegularFile(ROOT.resolve(".github/workflows/build.yml")));
+        assertTrue(Files.isRegularFile(ROOT.resolve(".github/workflows/release.yml")));
+        assertTrue(Files.isRegularFile(ROOT.resolve("scripts/package-release.sh")));
     }
 
     @Test

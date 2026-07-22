@@ -1,10 +1,9 @@
 package com.luci.snapshot.client.photo;
 
+import com.google.gson.JsonObject;
 import com.luci.snapshot.SnapshotInit;
 import com.mojang.blaze3d.platform.InputConstants;
-import com.mojang.blaze3d.platform.NativeImage;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,30 +13,38 @@ import java.util.HashMap;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.FontDescription;
 import net.minecraft.resources.Identifier;
 
 public final class SnapshotLighttableScreen extends Screen {
-    private static final int THUMBNAIL_LIMIT = 512;
+    private static final int THUMBNAIL_LIMIT = 320;
     private static final FontDescription.Resource VIEWFINDER_FONT = new FontDescription.Resource(
         Identifier.fromNamespaceAndPath(SnapshotInit.MOD_ID, "viewfinder")
     );
 
     private final List<Path> allPhotos = new ArrayList<>();
     private final List<Path> photos = new ArrayList<>();
-    private final List<TextureEntry> textures = new ArrayList<>();
+    private final List<Path> pagePhotos = new ArrayList<>();
+    private final Map<Path, SnapshotTextureLoader.TextureHandle> textures = new HashMap<>();
     private final List<Tile> tiles = new ArrayList<>();
     private final Map<Path, PhotoState> states = new HashMap<>();
     private int page;
+    private int loadGeneration;
+    private int pendingTextures;
     private Tile hoveredTile;
+    private Path selectedPhoto;
     private Path comparisonAnchor;
     private PhotoAlbum albumFilter = PhotoAlbum.ALL;
+    private Button deleteButton;
+    private Button deleteAllButton;
+    private Button trashButton;
+    private boolean trashAvailable;
 
     private SnapshotLighttableScreen() {
         super(Component.literal("Snapshot Camera Roll"));
@@ -50,8 +57,20 @@ public final class SnapshotLighttableScreen extends Screen {
     @Override
     protected void init() {
         scanPhotos();
+        trashAvailable = !SnapshotTrashStore.images(minecraft.gameDirectory.toPath()).isEmpty();
         page = Math.min(page, maxPage());
         loadPage();
+        deleteButton = addRenderableWidget(Button.builder(Component.literal("Trash Photo"), button -> confirmDelete(selectedPhoto))
+            .bounds(18, height - 26, 92, 20)
+            .build());
+        trashButton = addRenderableWidget(Button.builder(Component.literal("View Trash"),
+                button -> minecraft.setScreenAndShow(new SnapshotTrashScreen(this)))
+            .bounds(118, height - 26, 88, 20)
+            .build());
+        deleteAllButton = addRenderableWidget(Button.builder(Component.literal("Trash All..."), button -> confirmDeleteAll())
+            .bounds(width - 112, height - 26, 94, 20)
+            .build());
+        updateDeleteButtons();
     }
 
     @Override
@@ -65,46 +84,55 @@ public final class SnapshotLighttableScreen extends Screen {
         extractor.horizontalLine(18, width - 18, 30, 0x5543D6DF);
 
         tiles.clear();
-        if (textures.isEmpty()) {
+        if (photos.isEmpty()) {
             extractor.centeredText(font, styled("NO CAPTURES"), width / 2, height / 2 - 5, 0xFF9CA7AD);
         } else {
             drawGrid(extractor, mouseX, mouseY);
         }
 
         String pageText = (page + 1) + " / " + (maxPage() + 1);
-        extractor.centeredText(font, styled(pageText), width / 2, height - 17, 0xFF9CA7AD);
+        extractor.centeredText(font, styled(pageText), width / 2, height - 19, 0xFF9CA7AD);
         super.extractRenderState(extractor, mouseX, mouseY, partialTick);
     }
 
     private void drawGrid(GuiGraphicsExtractor extractor, int mouseX, int mouseY) {
         int columns = columns();
-        int rows = (int) Math.ceil(textures.size() / (double) columns);
+        int rows = (int) Math.ceil(pagePhotos.size() / (double) columns);
         int gap = 8;
         int margin = 18;
         int top = 42;
-        int bottom = 28;
+        int bottom = 54;
         int tileWidth = Math.max(80, (width - margin * 2 - gap * (columns - 1)) / columns);
         int tileHeight = Math.max(62, (height - top - bottom - gap * Math.max(0, rows - 1)) / Math.max(1, rows));
 
         hoveredTile = null;
-        for (int index = 0; index < textures.size(); index++) {
-            TextureEntry entry = textures.get(index);
+        for (int index = 0; index < pagePhotos.size(); index++) {
+            Path path = pagePhotos.get(index);
+            SnapshotTextureLoader.TextureHandle entry = textures.get(path);
             int column = index % columns;
             int row = index / columns;
             int x = margin + column * (tileWidth + gap);
             int y = top + row * (tileHeight + gap);
             int imageHeight = Math.max(32, tileHeight - 15);
-            Tile tile = new Tile(x, y, tileWidth, tileHeight, entry.path());
+            Tile tile = new Tile(x, y, tileWidth, tileHeight, path);
             boolean hovered = tile.contains(mouseX, mouseY);
             if (hovered) {
                 hoveredTile = tile;
+                selectedPhoto = path;
             }
+            boolean selected = path.equals(selectedPhoto);
             extractor.fill(x, y, x + tileWidth, y + tileHeight, hovered ? 0xFF182126 : 0xFF111416);
-            extractor.outline(x, y, tileWidth, tileHeight, hovered ? 0xAA43D6DF : 0x553F4A50);
-            drawFitted(extractor, entry, x + 2, y + 2, tileWidth - 4, imageHeight - 3);
-            String label = displayLabel(entry.path(), tileWidth - 10);
+            extractor.outline(x, y, tileWidth, tileHeight,
+                hovered ? 0xDD43D6DF : selected ? 0xAAFFD166 : 0x553F4A50);
+            if (entry != null) {
+                SnapshotTextureLoader.drawFitted(extractor, entry, x + 2, y + 2, tileWidth - 4, imageHeight - 3);
+            } else {
+                extractor.centeredText(font, styled("LOADING"), x + tileWidth / 2,
+                    y + Math.max(8, imageHeight / 2 - 4), 0xFF657177);
+            }
+            String label = displayLabel(path, tileWidth - 10);
             extractor.centeredText(font, styled(label), x + tileWidth / 2, y + tileHeight - 11, 0xFFC6CDD1);
-            PhotoState state = states.getOrDefault(entry.path(), PhotoState.EMPTY);
+            PhotoState state = states.getOrDefault(path, PhotoState.EMPTY);
             if (state.favorite()) {
                 extractor.text(font, styled("*"), x + 5, y + 5, 0xFFFFD166, true);
             }
@@ -112,21 +140,12 @@ public final class SnapshotLighttableScreen extends Screen {
                 extractor.text(font, styled(state.rating() + "/5"), x + tileWidth - 24, y + 5, 0xFFF4F6F7, true);
             }
             extractor.centeredText(font, styled(state.album().label()), x + tileWidth / 2, y + 5, 0xAAE5E9EB);
-            if (entry.path().equals(comparisonAnchor)) {
+            if (path.equals(comparisonAnchor)) {
                 extractor.horizontalLine(x + 4, x + tileWidth - 4, y + 4, 0xFFFFD166);
             }
             tiles.add(tile);
         }
-    }
-
-    private static void drawFitted(GuiGraphicsExtractor extractor, TextureEntry entry, int x, int y, int width, int height) {
-        double scale = Math.min(width / (double) entry.width(), height / (double) entry.height());
-        int drawWidth = Math.max(1, (int) Math.round(entry.width() * scale));
-        int drawHeight = Math.max(1, (int) Math.round(entry.height() * scale));
-        int drawX = x + (width - drawWidth) / 2;
-        int drawY = y + (height - drawHeight) / 2;
-        extractor.blit(RenderPipelines.GUI_TEXTURED, entry.id(), drawX, drawY, 0.0F, 0.0F,
-            drawWidth, drawHeight, entry.width(), entry.height());
+        updateDeleteButtons();
     }
 
     @Override
@@ -134,6 +153,7 @@ public final class SnapshotLighttableScreen extends Screen {
         if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) {
             for (Tile tile : tiles) {
                 if (tile.contains(event.x(), event.y())) {
+                    selectedPhoto = tile.path();
                     minecraft.setScreenAndShow(new SnapshotImageReviewScreen(tile.path(), this));
                     return true;
                 }
@@ -162,6 +182,10 @@ public final class SnapshotLighttableScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
+        if (event.key() == InputConstants.KEY_M) {
+            minecraft.setScreenAndShow(null);
+            return true;
+        }
         if (event.key() == InputConstants.KEY_LEFT || event.key() == InputConstants.KEY_PAGEUP) {
             setPage(page - 1);
             return true;
@@ -205,10 +229,7 @@ public final class SnapshotLighttableScreen extends Screen {
             return true;
         }
         if (hoveredTile != null && (event.key() == InputConstants.KEY_DELETE || event.key() == InputConstants.KEY_BACKSPACE)) {
-            PhotoMetadataStore.delete(hoveredTile.path());
-            scanPhotos();
-            page = Math.min(page, maxPage());
-            loadPage();
+            confirmDelete(hoveredTile.path());
             return true;
         }
         return super.keyPressed(event);
@@ -235,16 +256,21 @@ public final class SnapshotLighttableScreen extends Screen {
             return;
         }
         try (var paths = Files.list(directory)) {
-            allPhotos.addAll(paths
+            List<Path> discovered = new ArrayList<>(paths
                 .filter(path -> {
                     String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
                     return name.endsWith(".png") && !name.endsWith(".source.png");
                 })
-                .sorted(Comparator.<Path, Boolean>comparing(PhotoMetadataStore::favorite).reversed()
-                    .thenComparing(Comparator.comparingLong(SnapshotLighttableScreen::modifiedTime).reversed()))
                 .toList());
-            for (Path photo : allPhotos) {
+            for (Path photo : discovered) {
                 refreshState(photo);
+            }
+            discovered.sort(Comparator.<Path, Boolean>comparing(
+                    path -> states.getOrDefault(path, PhotoState.EMPTY).favorite()).reversed()
+                .thenComparing(Comparator.comparingLong(SnapshotLighttableScreen::modifiedTime).reversed()));
+            allPhotos.addAll(discovered);
+            if (selectedPhoto != null && !allPhotos.contains(selectedPhoto)) {
+                selectedPhoto = null;
             }
             applyAlbumFilter(false);
         } catch (IOException exception) {
@@ -256,19 +282,42 @@ public final class SnapshotLighttableScreen extends Screen {
         releaseTextures();
         int start = page * pageSize();
         int end = Math.min(photos.size(), start + pageSize());
+        pagePhotos.clear();
+        pagePhotos.addAll(photos.subList(start, end));
+        if (!pagePhotos.isEmpty() && (selectedPhoto == null || !pagePhotos.contains(selectedPhoto))) {
+            selectedPhoto = pagePhotos.getFirst();
+        } else if (pagePhotos.isEmpty()) {
+            selectedPhoto = null;
+        }
+        updateDeleteButtons();
+        int generation = loadGeneration;
+        pendingTextures = pagePhotos.size();
         for (int index = start; index < end; index++) {
             Path path = photos.get(index);
-            try {
-                textures.add(loadTexture(path, "lighttable"));
-            } catch (IOException exception) {
-                SnapshotInit.LOGGER.warn("[Snapshot] Could not load camera roll image {}.", path, exception);
-            }
+            SnapshotTextureLoader.decodeAsync(path, THUMBNAIL_LIMIT, true).whenComplete((decoded, throwable) ->
+                minecraft.execute(() -> finishTextureLoad(path, generation, decoded, throwable))
+            );
         }
     }
 
+    private void finishTextureLoad(Path path, int generation, SnapshotTextureLoader.DecodedImage decoded,
+                                   Throwable throwable) {
+        if (generation != loadGeneration || minecraft.gui.screen() != this) {
+            if (decoded != null) {
+                decoded.close();
+            }
+            return;
+        }
+        pendingTextures = Math.max(0, pendingTextures - 1);
+        if (throwable != null) {
+            SnapshotInit.LOGGER.warn("[Snapshot] Could not load camera roll image {}.", path, throwable);
+            return;
+        }
+        textures.put(path, SnapshotTextureLoader.register(decoded, "lighttable"));
+    }
+
     private void refreshState(Path path) {
-        states.put(path, new PhotoState(PhotoMetadataStore.favorite(path), PhotoMetadataStore.rating(path),
-            PhotoMetadataStore.album(path)));
+        states.put(path, PhotoState.fromMetadata(PhotoMetadataStore.read(path)));
     }
 
     private void applyAlbumFilter(boolean reload) {
@@ -285,38 +334,57 @@ public final class SnapshotLighttableScreen extends Screen {
         }
     }
 
-    static TextureEntry loadTexture(Path path, String group) throws IOException {
-        NativeImage source;
-        try (InputStream stream = Files.newInputStream(path)) {
-            source = NativeImage.read(stream);
+    private void confirmDelete(Path path) {
+        if (path == null || !Files.isRegularFile(path)) {
+            return;
         }
+        String name = path.getFileName().toString();
+        minecraft.setScreenAndShow(new ConfirmScreen(confirmed -> {
+            if (confirmed) {
+                SnapshotTrashStore.moveToTrash(path);
+                selectedPhoto = null;
+            }
+            minecraft.setScreenAndShow(this);
+        }, Component.literal("Move photograph to trash?"),
+            Component.literal(name + " can be restored from Camera Roll / Trash.")));
+    }
 
-        NativeImage pixels = source;
-        int largest = Math.max(source.getWidth(), source.getHeight());
-        int limit = "review".equals(group) ? 2048 : THUMBNAIL_LIMIT;
-        if (largest > limit) {
-            double scale = limit / (double) largest;
-            int width = Math.max(1, (int) Math.round(source.getWidth() * scale));
-            int height = Math.max(1, (int) Math.round(source.getHeight() * scale));
-            pixels = new NativeImage(width, height, false);
-            source.resizeSubRectTo(0, 0, source.getWidth(), source.getHeight(), pixels);
-            source.close();
+    private void confirmDeleteAll() {
+        if (allPhotos.isEmpty()) {
+            return;
         }
+        List<Path> pendingDeletion = List.copyOf(allPhotos);
+        minecraft.setScreenAndShow(new ConfirmScreen(confirmed -> {
+            if (confirmed) {
+                SnapshotTrashStore.moveAllToTrash(pendingDeletion);
+                selectedPhoto = null;
+                page = 0;
+            }
+            minecraft.setScreenAndShow(this);
+        }, Component.literal("Move every photograph to trash?"),
+            Component.literal(pendingDeletion.size() + " photographs can be restored until trash is emptied.")));
+    }
 
-        String hash = Integer.toUnsignedString(path.toAbsolutePath().toString().hashCode());
-        Identifier id = Identifier.fromNamespaceAndPath(SnapshotInit.MOD_ID, group + "/" + hash);
-        DynamicTexture texture = new DynamicTexture(() -> "Snapshot " + group + " " + path.getFileName(), pixels);
-        Minecraft.getInstance().getTextureManager().register(id, texture);
-        texture.upload();
-        return new TextureEntry(path, id, pixels.getWidth(), pixels.getHeight());
+    private void updateDeleteButtons() {
+        if (deleteButton != null) {
+            deleteButton.active = selectedPhoto != null && Files.isRegularFile(selectedPhoto);
+        }
+        if (deleteAllButton != null) {
+            deleteAllButton.active = !allPhotos.isEmpty();
+        }
+        if (trashButton != null) {
+            trashButton.active = trashAvailable;
+        }
     }
 
     private void releaseTextures() {
-        for (TextureEntry entry : textures) {
-            minecraft.getTextureManager().release(entry.id());
+        loadGeneration++;
+        for (SnapshotTextureLoader.TextureHandle entry : textures.values()) {
+            SnapshotTextureLoader.release(minecraft, entry);
         }
         textures.clear();
         tiles.clear();
+        pendingTextures = 0;
     }
 
     @Override
@@ -377,9 +445,6 @@ public final class SnapshotLighttableScreen extends Screen {
         return Component.literal(value).withStyle(style -> style.withFont(VIEWFINDER_FONT));
     }
 
-    record TextureEntry(Path path, Identifier id, int width, int height) {
-    }
-
     private record Tile(int x, int y, int width, int height, Path path) {
         boolean contains(double mouseX, double mouseY) {
             return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
@@ -388,5 +453,11 @@ public final class SnapshotLighttableScreen extends Screen {
 
     private record PhotoState(boolean favorite, int rating, PhotoAlbum album) {
         private static final PhotoState EMPTY = new PhotoState(false, 0, PhotoAlbum.UNSORTED);
+
+        private static PhotoState fromMetadata(JsonObject metadata) {
+            boolean favorite = metadata.has("favorite") && metadata.get("favorite").getAsBoolean();
+            int rating = metadata.has("rating") ? Math.max(0, Math.min(5, metadata.get("rating").getAsInt())) : 0;
+            return new PhotoState(favorite, rating, PhotoAlbum.fromMetadata(metadata));
+        }
     }
 }

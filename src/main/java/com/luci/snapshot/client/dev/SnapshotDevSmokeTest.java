@@ -23,6 +23,7 @@ import com.luci.snapshot.client.photo.SnapshotJournalScreen;
 import com.luci.snapshot.client.photo.SnapshotLighttableScreen;
 import com.luci.snapshot.client.photo.SnapshotPhotoViewer;
 import com.luci.snapshot.config.SnapshotConfig;
+import com.luci.snapshot.item.PhotographData;
 import com.luci.snapshot.item.SnapshotItems;
 import com.mojang.blaze3d.platform.InputConstants;
 import java.awt.image.BufferedImage;
@@ -35,19 +36,30 @@ import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.MapItem;
+import net.minecraft.world.level.saveddata.maps.MapId;
 
 public final class SnapshotDevSmokeTest {
     private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
@@ -64,7 +76,21 @@ public final class SnapshotDevSmokeTest {
     private static final OpticsPreset[] PERFORMANCE_PRESETS = {
         OpticsPreset.LOW, OpticsPreset.MEDIUM, OpticsPreset.ULTRA
     };
+    private static final List<CalibrationShot> CALIBRATION_SHOTS = List.of(
+        new CalibrationShot("aperture_narrow", 100, "1/8", 8.0, 14.0, false, 0),
+        new CalibrationShot("aperture_wide", 100, "1/250", 1.2, 14.0, false, 0),
+        new CalibrationShot("focus_near", 100, "1/250", 1.2, 6.0, false, 0),
+        new CalibrationShot("focus_far", 100, "1/250", 1.2, 24.0, false, 0),
+        new CalibrationShot("iso_low", 100, "1/125", 1.8, 14.0, false, 0),
+        new CalibrationShot("iso_high", 400, "1/125", 1.8, 14.0, false, 0),
+        new CalibrationShot("shutter_fast", 100, "1/250", 1.8, 14.0, false, 0),
+        new CalibrationShot("shutter_slow", 100, "1/60", 1.8, 14.0, false, 0),
+        new CalibrationShot("af_left", 100, "1/250", 1.2, 14.0, true, -1),
+        new CalibrationShot("af_right", 100, "1/250", 1.2, 14.0, true, 1)
+    );
     private static final JsonArray METRICS = new JsonArray();
+    private static final Map<String, Path> CALIBRATION_IMAGES = new LinkedHashMap<>();
+    private static final Map<String, Double> CALIBRATION_AF_DISTANCES = new LinkedHashMap<>();
     private static int stage;
     private static int ticks;
     private static long startedMillis;
@@ -81,8 +107,20 @@ public final class SnapshotDevSmokeTest {
     private static int multiplayerMapsAtStart;
     private static int image2MapBundlesAtStart;
     private static boolean keybindHudExpandedAtStart;
+    private static boolean keybindAeLockAtStart;
+    private static boolean keybindAfLockAtStart;
     private static String keybindEnvironmentAtStart;
     private static boolean keybindShaderActiveAtStart;
+    private static BlockPos calibrationAnchor;
+    private static double calibrationReturnX;
+    private static double calibrationReturnY;
+    private static double calibrationReturnZ;
+    private static float calibrationReturnYaw;
+    private static float calibrationReturnPitch;
+    private static int calibrationShotIndex;
+    private static boolean calibrationMetricsRecorded;
+    private static int highResolutionSourceWidth;
+    private static int highResolutionSourceHeight;
 
     private SnapshotDevSmokeTest() {
     }
@@ -141,8 +179,18 @@ public final class SnapshotDevSmokeTest {
                 client.player.connection.sendCommand("give @s snapshot:camera");
                 client.player.connection.sendCommand("give @s snapshot:photographic_paper 16");
                 client.player.connection.sendCommand("give @s snapshot:tripod");
+                if ("controls".equalsIgnoreCase(TEST_CASE)) {
+                    client.player.connection.sendCommand("clear @s snapshot:photograph");
+                    client.player.connection.sendCommand("clear @s minecraft:filled_map");
+                }
             }
             SnapshotInit.LOGGER.info("[Snapshot] Development smoke test prepared the test world.");
+            if ("calibration".equalsIgnoreCase(TEST_CASE)) {
+                prepareCalibrationWorld(client);
+                stage = 300;
+                ticks = 0;
+                return;
+            }
             stage = 1;
             ticks = 0;
         } else if (stage == 1 && ticks >= 80) {
@@ -156,8 +204,8 @@ public final class SnapshotDevSmokeTest {
                     fail(client, "Viewfinder opened in survival without a camera.", null);
                     return;
                 }
-                client.player.connection.sendCommand("give @s snapshot:camera");
-                stage = 80;
+                clickBinding(SnapshotKeybinds.toggle());
+                stage = 79;
                 ticks = 0;
                 return;
             }
@@ -236,6 +284,18 @@ public final class SnapshotDevSmokeTest {
                 SnapshotCameraController.triggerCapture();
                 SnapshotInit.LOGGER.info("[Snapshot] Development focused visual test started.");
                 stage = 20;
+                ticks = 0;
+                return;
+            }
+            if ("highres".equalsIgnoreCase(TEST_CASE)) {
+                highResolutionSourceWidth = client.gameRenderer.mainRenderTarget().width;
+                highResolutionSourceHeight = client.gameRenderer.mainRenderTarget().height;
+                SnapshotCameraController.settings().setExposureBracket(ExposureBracket.OFF);
+                SnapshotCameraController.settings().setCaptureTechnique(CaptureTechnique.TILED_2X);
+                SnapshotCameraController.triggerCapture();
+                SnapshotInit.LOGGER.info("[Snapshot] Tiled 2X capture started from a {}x{} framebuffer.",
+                    highResolutionSourceWidth, highResolutionSourceHeight);
+                stage = 76;
                 ticks = 0;
                 return;
             }
@@ -329,10 +389,29 @@ public final class SnapshotDevSmokeTest {
             pass(client, "Item artwork visual test completed.");
         } else if (stage == 75 && ticks >= 80 && !SnapshotCameraController.captureInProgress()) {
             pass(client, "Renderer compatibility capture completed.");
-        } else if (stage == 80 && ticks >= 20) {
-            SnapshotCameraController.toggle();
+        } else if (stage == 76 && ticks >= 200 && !SnapshotCameraController.captureInProgress()) {
+            pass(client, "Tiled high-resolution capture completed.");
+        } else if (stage == 79 && ticks >= 2) {
             if (!SnapshotCameraController.active()) {
-                fail(client, "Viewfinder did not open after receiving a camera.", null);
+                fail(client, "The V shortcut did not open the viewfinder while cheats were available.", null);
+                return;
+            }
+            clickBinding(SnapshotKeybinds.toggle());
+            client.player.connection.sendCommand("give @s snapshot:camera");
+            stage = 80;
+            ticks = 0;
+        } else if (stage == 80 && ticks >= 20) {
+            for (int slot = 0; slot < 9; slot++) {
+                if (client.player.getInventory().getItem(slot).getItem() == SnapshotItems.CAMERA) {
+                    client.player.getInventory().setSelectedSlot(slot);
+                    break;
+                }
+            }
+            InteractionResult cameraUse = UseItemCallback.EVENT.invoker().interact(
+                client.player, client.level, InteractionHand.MAIN_HAND);
+            require(cameraUse.consumesAction(), "Camera right-click callback did not consume the held Camera use.");
+            if (!SnapshotCameraController.active()) {
+                fail(client, "Right-clicking the held Camera did not open the viewfinder.", null);
                 return;
             }
             SnapshotCameraController.triggerCapture();
@@ -384,14 +463,14 @@ public final class SnapshotDevSmokeTest {
             stage = 86;
             ticks = 0;
         } else if (stage == 86 && ticks >= 1) {
-            require(SnapshotCameraController.settings().selected() == CameraControl.APERTURE.next(),
+            require(SnapshotCameraController.settings().selected() == CameraControl.SHUTTER,
                 "Next-control key did not advance the selected camera control.");
             clickBinding(SnapshotKeybinds.previousControl());
             stage = 87;
             ticks = 0;
         } else if (stage == 87 && ticks >= 1) {
             CameraSettings settings = SnapshotCameraController.settings();
-            require(settings.selected() == CameraControl.APERTURE,
+            require(settings.selected() == CameraControl.EXPOSURE_MODE,
                 "Previous-control key did not restore the selected camera control.");
             settings.select(CameraControl.ISO);
             settings.adjust(1);
@@ -430,6 +509,7 @@ public final class SnapshotDevSmokeTest {
             SnapshotCameraController.settings().setPreset(OpticsPreset.ULTRA);
             client.player.connection.sendCommand("time set noon");
             client.player.connection.sendCommand("weather clear");
+            grabQaScreenshot(client, "snapshot_viewfinder_qa.png", "viewfinder key-guide");
             clickBinding(SnapshotKeybinds.tutorial());
             stage = 92;
             ticks = 0;
@@ -437,6 +517,9 @@ public final class SnapshotDevSmokeTest {
             require(client.gui.screen() != null && client.gui.screen().getClass().getSimpleName().equals("SnapshotTutorialScreen"),
                 "Tutorial key did not open the Snapshot tutorial.");
             client.setScreenAndShow(null);
+            if (!SnapshotCameraController.active()) {
+                SnapshotCameraController.toggle();
+            }
             clickBinding(SnapshotKeybinds.quickMenu());
             stage = 93;
             ticks = 0;
@@ -455,6 +538,39 @@ public final class SnapshotDevSmokeTest {
                 "AF-point key did not open the focus-point selector.");
             grabQaScreenshot(client, "snapshot_focus_points_qa.png", "AF-point selector");
             client.setScreenAndShow(null);
+            SnapshotCameraController.settings().setCaptureTechnique(CaptureTechnique.SINGLE);
+            SnapshotCameraController.settings().setExposureBracket(ExposureBracket.OFF);
+            SnapshotCameraController.triggerCapture();
+            require(SnapshotCameraController.captureInProgress(),
+                "Could not arm the pending capture used by the inventory cancellation check.");
+            client.setScreenAndShow(new InventoryScreen(client.player));
+            SnapshotCameraController.triggerCapture();
+            stage = 941;
+            ticks = 0;
+        } else if (stage == 941 && ticks >= 2) {
+            require(!SnapshotCameraController.active(),
+                "Opening the inventory did not suspend and close the active viewfinder.");
+            require(!SnapshotCameraController.captureInProgress(),
+                "A pending camera operation survived opening the inventory.");
+            client.setScreenAndShow(null);
+            SnapshotCameraController.toggle();
+            require(SnapshotCameraController.active(),
+                "Viewfinder could not reopen after the inventory-screen safety check.");
+            SnapshotCameraController.settings().applyAstrophotographyPreset();
+            SnapshotCameraController.settings().select(CameraControl.SHUTTER);
+            SnapshotCameraController.settings().adjust(-3);
+            clickBinding(SnapshotKeybinds.capture());
+            stage = 942;
+            ticks = 0;
+        } else if (stage == 942 && ticks >= 2) {
+            require(SnapshotCameraController.captureInProgress(),
+                "The C key did not start the cancellable long exposure.");
+            clickBinding(SnapshotKeybinds.capture());
+            stage = 943;
+            ticks = 0;
+        } else if (stage == 943 && ticks >= 2) {
+            require(!SnapshotCameraController.captureInProgress(),
+                "Pressing C again did not cancel the active capture.");
             SnapshotCameraController.settings().reset();
             SnapshotCameraController.settings().cycleFilmProfile();
             SnapshotCameraController.settings().setCaptureTechnique(CaptureTechnique.SINGLE);
@@ -469,6 +585,12 @@ public final class SnapshotDevSmokeTest {
                 fail(client, "Control playtest capture did not deliver a Photograph and filled map.", null);
                 return;
             }
+            ItemStack photograph = firstItem(client, SnapshotItems.PHOTOGRAPH);
+            MapId photographMap = photograph.get(DataComponents.MAP_ID);
+            require(photographMap != null && MapItem.getSavedData(photographMap, client.level) != null,
+                "Photograph map data was not synchronized to the client.");
+            require(PhotographData.colors(photograph).filter(colors -> colors.length == PhotographData.MAP_PIXEL_COUNT).isPresent(),
+                "Photograph did not carry its embedded fallback preview.");
             clickBinding(SnapshotKeybinds.toggle());
             clickBinding(SnapshotKeybinds.lighttable());
             stage = 96;
@@ -490,7 +612,7 @@ public final class SnapshotDevSmokeTest {
         } else if (stage == 98 && ticks >= 10) {
             require(ShaderCompatibility.shaderPackActive() == keybindShaderActiveAtStart,
                 "The control playtest changed the active shader state.");
-            pass(client, "Camera controls, registered keybindings, menus, AF points, capture, and review completed.");
+            pass(client, "Camera controls, screen capture guard, registered keybindings, menus, AF points, capture, and review completed.");
         } else if (stage >= 100 && stage <= 104) {
             tickPerformance(client);
         } else if (stage == 200 && ticks >= 40) {
@@ -536,6 +658,38 @@ public final class SnapshotDevSmokeTest {
                 return;
             }
             pass(client, "Multiplayer permissions and photograph/map delivery completed.");
+        } else if (stage == 300 && ticks >= 100) {
+            if (!SnapshotCameraController.active()) {
+                SnapshotCameraController.toggle();
+            }
+            require(SnapshotCameraController.active(), "Calibration viewfinder did not open.");
+            calibrationShotIndex = 0;
+            configureCalibrationShot(CALIBRATION_SHOTS.get(calibrationShotIndex));
+            stage = 301;
+            ticks = 0;
+        } else if (stage == 301 && ticks >= 20) {
+            CalibrationShot shot = CALIBRATION_SHOTS.get(calibrationShotIndex);
+            if (shot.autoFocus()) {
+                SnapshotCameraController.requestAutofocus();
+                CALIBRATION_AF_DISTANCES.put(shot.label(), SnapshotCameraController.settings().focusDistance());
+            }
+            SnapshotCameraController.triggerCapture();
+            require(SnapshotCameraController.captureInProgress(),
+                "Calibration capture did not start for " + shot.label() + ".");
+            stage = 302;
+            ticks = 0;
+        } else if (stage == 302 && ticks >= 20 && !SnapshotCameraController.captureInProgress()) {
+            CalibrationShot shot = CALIBRATION_SHOTS.get(calibrationShotIndex);
+            recordCalibrationCapture(shot.label());
+            calibrationShotIndex++;
+            if (calibrationShotIndex >= CALIBRATION_SHOTS.size()) {
+                appendCalibrationMetrics();
+                pass(client, "Optical calibration scene and measured capture suite completed.");
+            } else {
+                configureCalibrationShot(CALIBRATION_SHOTS.get(calibrationShotIndex));
+                stage = 301;
+                ticks = 0;
+            }
         } else if (ticks > timeoutForStage()) {
             fail(client, "Development smoke test timed out in stage " + stage + ".", null);
         }
@@ -581,6 +735,7 @@ public final class SnapshotDevSmokeTest {
         require(settings.focusPointX() == 1 && settings.focusPointY() == -1,
             "Selectable AF point did not move to the top-right position.");
         settings.setAutoFocus(true);
+        settings.setFocusPoint(0, 0);
         SnapshotCameraController.requestAutofocus();
 
         settings.toggleFlash();
@@ -621,6 +776,8 @@ public final class SnapshotDevSmokeTest {
         settings.reset();
         settings.select(CameraControl.ISO);
         keybindHudExpandedAtStart = SnapshotCameraController.hudExpanded();
+        keybindAeLockAtStart = SnapshotCameraController.aeLocked();
+        keybindAfLockAtStart = SnapshotCameraController.afLocked();
         keybindShaderActiveAtStart = ShaderCompatibility.shaderPackActive();
         clickBinding(SnapshotKeybinds.increase());
         clickBinding(SnapshotKeybinds.autofocus());
@@ -649,14 +806,258 @@ public final class SnapshotDevSmokeTest {
         require(settings.exposureMode() != ExposureMode.MANUAL, "Exposure-mode key did not turn the command dial.");
         require(!"HISTOGRAM".equals(settings.exposureAssist().name()),
             "Exposure-assist key did not advance the assist mode.");
-        require(SnapshotCameraController.aeLocked() && SnapshotCameraController.afLocked(),
-            "AE-L or AF-L key did not engage its lock.");
+        require(SnapshotCameraController.aeLocked() != keybindAeLockAtStart
+                && SnapshotCameraController.afLocked() != keybindAfLockAtStart,
+            "AE-L or AF-L key did not toggle its lock state.");
         require(ShaderCompatibility.shaderPackActive() == keybindShaderActiveAtStart,
             "A Snapshot keybinding unexpectedly toggled the active shader pack.");
     }
 
     private static void clickBinding(KeyMapping mapping) {
         KeyMapping.click(KeyMappingHelper.getBoundKeyOf(mapping));
+    }
+
+    private static void prepareCalibrationWorld(Minecraft client) {
+        calibrationReturnX = client.player.getX();
+        calibrationReturnY = client.player.getY();
+        calibrationReturnZ = client.player.getZ();
+        calibrationReturnYaw = client.player.getYRot();
+        calibrationReturnPitch = client.player.getXRot();
+        calibrationAnchor = new BlockPos(
+            (int) Math.floor(client.player.getX()), 200, (int) Math.floor(client.player.getZ())
+        );
+        int x = calibrationAnchor.getX();
+        int y = calibrationAnchor.getY();
+        int z = calibrationAnchor.getZ();
+
+        sendCommand(client, "kill @e[type=minecraft:pig,tag=snapshot_calibration]");
+        sendCommand(client, String.format(Locale.ROOT,
+            "fill %d %d %d %d %d %d minecraft:air", x - 14, y - 2, z - 3, x + 14, y + 10, z + 34));
+        sendCommand(client, String.format(Locale.ROOT,
+            "fill %d %d %d %d %d %d minecraft:smooth_stone", x - 14, y - 1, z - 3, x + 14, y - 1, z + 34));
+
+        // Three high-contrast planes sit on the left, centre, and right AF rays.
+        sendCommand(client, String.format(Locale.ROOT,
+            "fill %d %d %d %d %d %d minecraft:red_concrete", x - 3, y, z + 7, x - 1, y + 4, z + 7));
+        sendCommand(client, String.format(Locale.ROOT,
+            "setblock %d %d %d minecraft:target", x - 2, y + 2, z + 7));
+        sendCommand(client, String.format(Locale.ROOT,
+            "fill %d %d %d %d %d %d minecraft:light_gray_concrete", x - 1, y, z + 14, x + 1, y + 4, z + 14));
+        sendCommand(client, String.format(Locale.ROOT,
+            "setblock %d %d %d minecraft:target", x, y + 2, z + 14));
+        sendCommand(client, String.format(Locale.ROOT,
+            "fill %d %d %d %d %d %d minecraft:blue_concrete", x + 6, y, z + 24, x + 8, y + 4, z + 24));
+        sendCommand(client, String.format(Locale.ROOT,
+            "setblock %d %d %d minecraft:target", x + 7, y + 2, z + 24));
+
+        // Tonal, emissive, and translucent references expose clipping and depth-edge defects.
+        String[] chartBlocks = {
+            "black_concrete", "gray_concrete", "light_gray_concrete", "white_concrete", "sea_lantern"
+        };
+        for (int column = 0; column < chartBlocks.length; column++) {
+            int chartX = x - 6 + column * 2;
+            sendCommand(client, String.format(Locale.ROOT,
+                "fill %d %d %d %d %d %d minecraft:%s",
+                chartX, y, z + 30, chartX + 1, y + 5, z + 30, chartBlocks[column]));
+        }
+        sendCommand(client, String.format(Locale.ROOT,
+            "fill %d %d %d %d %d %d minecraft:light_blue_stained_glass",
+            x + 2, y + 5, z + 10, x + 4, y + 7, z + 10));
+        sendCommand(client, String.format(Locale.ROOT,
+            "summon minecraft:pig %.1f %d %.1f {Tags:[\"snapshot_calibration\"]}",
+            x - 6.5, y, z + 17.5));
+        sendCommand(client, "time set noon");
+        sendCommand(client, "weather clear");
+        sendCommand(client, String.format(Locale.ROOT,
+            "tp @s %.1f %.1f %.1f 0 0", x + 0.5, (double) y, z + 0.5));
+        SnapshotInit.LOGGER.info("[Snapshot] Optical calibration scene built at {}, {}, {}.", x, y, z);
+    }
+
+    private static void configureCalibrationShot(CalibrationShot shot) {
+        CameraSettings settings = SnapshotCameraController.settings();
+        settings.reset();
+        settings.setExposureMode(ExposureMode.MANUAL);
+        if (settings.autoIso()) {
+            settings.toggleAutoIso();
+        }
+        settings.setCaptureTechnique(CaptureTechnique.SINGLE);
+        settings.setExposureBracket(ExposureBracket.OFF);
+        setCalibrationIso(settings, shot.iso());
+        setCalibrationShutter(settings, shot.shutter());
+        setCalibrationAperture(settings, shot.aperture());
+        settings.setFocusDistance(shot.focusDistance());
+        settings.setAutoFocus(shot.autoFocus());
+        settings.setFocusPoint(shot.focusPointX(), 0);
+        setPreset(settings, OpticsPreset.ULTRA);
+        SnapshotInit.LOGGER.info(
+            "[Snapshot] Calibration shot {} armed: ISO {}, {}, f/{}, {} {}.",
+            shot.label(), settings.iso(), settings.shutter(), settings.aperture(),
+            settings.autoFocus() ? "AF" : "MF", settings.focusDistanceLabel()
+        );
+    }
+
+    private static void setCalibrationIso(CameraSettings settings, int iso) {
+        settings.select(CameraControl.ISO);
+        settings.adjust(-100);
+        for (int attempts = 0; attempts < 16 && settings.iso() < iso; attempts++) {
+            settings.adjust(1);
+        }
+        require(settings.iso() == iso, "Calibration could not select ISO " + iso + ".");
+    }
+
+    private static void setCalibrationShutter(CameraSettings settings, String shutter) {
+        settings.select(CameraControl.SHUTTER);
+        settings.adjust(-100);
+        for (int attempts = 0; attempts < 24 && !shutter.equals(settings.shutter()); attempts++) {
+            settings.adjust(1);
+        }
+        require(shutter.equals(settings.shutter()), "Calibration could not select shutter " + shutter + ".");
+    }
+
+    private static void setCalibrationAperture(CameraSettings settings, double aperture) {
+        settings.select(CameraControl.APERTURE);
+        settings.adjust(-100);
+        for (int attempts = 0; attempts < 16 && Math.abs(settings.apertureNumber() - aperture) > 0.001; attempts++) {
+            settings.adjust(1);
+        }
+        require(Math.abs(settings.apertureNumber() - aperture) <= 0.001,
+            "Calibration could not select aperture f/" + aperture + ".");
+    }
+
+    private static void recordCalibrationCapture(String label) {
+        Path capture = newFiles(captureDirectory, ".png", ".source.png").stream()
+            .filter(path -> !CALIBRATION_IMAGES.containsValue(path))
+            .reduce((first, second) -> second)
+            .orElseThrow(() -> new IllegalStateException("No fresh calibration PNG was written for " + label + "."));
+        CALIBRATION_IMAGES.put(label, capture);
+    }
+
+    private static void appendCalibrationMetrics() {
+        if (calibrationMetricsRecorded) {
+            return;
+        }
+        calibrationMetricsRecorded = true;
+        Map<String, ImageStats> stats = new LinkedHashMap<>();
+        for (Map.Entry<String, Path> entry : CALIBRATION_IMAGES.entrySet()) {
+            ImageStats measured = measureImage(entry.getValue());
+            stats.put(entry.getKey(), measured);
+            JsonObject metric = new JsonObject();
+            metric.addProperty("operation", "optical_calibration_capture");
+            metric.addProperty("shot", entry.getKey());
+            metric.addProperty("mean_luminance", measured.meanLuminance());
+            metric.addProperty("edge_energy", measured.edgeEnergy());
+            Double focusDistance = CALIBRATION_AF_DISTANCES.get(entry.getKey());
+            if (focusDistance != null) {
+                metric.addProperty("autofocus_distance_m", focusDistance);
+            }
+            METRICS.add(metric);
+        }
+
+        double apertureDifference = imageDifference(
+            CALIBRATION_IMAGES.get("aperture_narrow"), CALIBRATION_IMAGES.get("aperture_wide"));
+        double focusDifference = imageDifference(
+            CALIBRATION_IMAGES.get("focus_near"), CALIBRATION_IMAGES.get("focus_far"));
+        double afDifference = imageDifference(
+            CALIBRATION_IMAGES.get("af_left"), CALIBRATION_IMAGES.get("af_right"));
+        double afDistanceDifference = Math.abs(
+            CALIBRATION_AF_DISTANCES.getOrDefault("af_left", 0.0)
+                - CALIBRATION_AF_DISTANCES.getOrDefault("af_right", 0.0));
+        addCalibrationComparison("aperture_response", apertureDifference);
+        addCalibrationComparison("focus_plane_response", focusDifference);
+        addCalibrationComparison("af_point_image_response", afDifference);
+        addCalibrationComparison("af_point_distance_delta_m", afDistanceDifference);
+
+        require(apertureDifference >= 0.25,
+            "Aperture calibration produced no visible optical change (RMS=" + formatMetric(apertureDifference) + ").");
+        require(focusDifference >= 0.20,
+            "Near/far focus calibration produced no visible change (RMS=" + formatMetric(focusDifference) + ").");
+        require(stats.get("iso_high").meanLuminance() >= stats.get("iso_low").meanLuminance() + 2.0,
+            "Higher ISO did not measurably brighten the calibration frame.");
+        require(stats.get("shutter_slow").meanLuminance() >= stats.get("shutter_fast").meanLuminance() + 2.0,
+            "Slower shutter speed did not measurably brighten the calibration frame.");
+        require(afDistanceDifference >= 2.0,
+            "Left and right AF points did not resolve different subject distances.");
+        require(CALIBRATION_AF_DISTANCES.getOrDefault("af_left", 256.0) < 10.0,
+            "Left AF point did not lock to the near calibration target.");
+        require(CALIBRATION_AF_DISTANCES.getOrDefault("af_right", 0.0) > 18.0,
+            "Right AF point did not lock to the distant calibration target.");
+        require(afDifference >= 0.15,
+            "Left and right AF-point captures did not visibly differ (RMS=" + formatMetric(afDifference) + ").");
+    }
+
+    private static void addCalibrationComparison(String name, double value) {
+        JsonObject metric = new JsonObject();
+        metric.addProperty("operation", name);
+        metric.addProperty("value", value);
+        METRICS.add(metric);
+    }
+
+    private static ImageStats measureImage(Path image) {
+        try {
+            BufferedImage decoded = ImageIO.read(image.toFile());
+            require(decoded != null, "Calibration PNG could not be decoded: " + image.getFileName());
+            int step = Math.max(1, Math.min(decoded.getWidth(), decoded.getHeight()) / 360);
+            double luminanceTotal = 0.0;
+            double edgeTotal = 0.0;
+            int samples = 0;
+            int edges = 0;
+            for (int y = 0; y < decoded.getHeight(); y += step) {
+                for (int x = 0; x < decoded.getWidth(); x += step) {
+                    double current = luminance(decoded.getRGB(x, y));
+                    luminanceTotal += current;
+                    samples++;
+                    if (x + step < decoded.getWidth()) {
+                        edgeTotal += Math.abs(current - luminance(decoded.getRGB(x + step, y)));
+                        edges++;
+                    }
+                    if (y + step < decoded.getHeight()) {
+                        edgeTotal += Math.abs(current - luminance(decoded.getRGB(x, y + step)));
+                        edges++;
+                    }
+                }
+            }
+            return new ImageStats(luminanceTotal / Math.max(1, samples), edgeTotal / Math.max(1, edges));
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not measure calibration PNG " + image.getFileName(), exception);
+        }
+    }
+
+    private static double imageDifference(Path first, Path second) {
+        require(first != null && second != null, "Calibration comparison is missing a captured image.");
+        try {
+            BufferedImage a = ImageIO.read(first.toFile());
+            BufferedImage b = ImageIO.read(second.toFile());
+            require(a != null && b != null, "Calibration comparison contains an unreadable image.");
+            int width = Math.min(a.getWidth(), b.getWidth());
+            int height = Math.min(a.getHeight(), b.getHeight());
+            int step = Math.max(1, Math.min(width, height) / 360);
+            double squared = 0.0;
+            int samples = 0;
+            for (int y = 0; y < height; y += step) {
+                for (int x = 0; x < width; x += step) {
+                    double difference = luminance(a.getRGB(x, y)) - luminance(b.getRGB(x, y));
+                    squared += difference * difference;
+                    samples++;
+                }
+            }
+            return Math.sqrt(squared / Math.max(1, samples));
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not compare calibration captures.", exception);
+        }
+    }
+
+    private static double luminance(int argb) {
+        return ((argb >> 16) & 0xFF) * 0.2126
+            + ((argb >> 8) & 0xFF) * 0.7152
+            + (argb & 0xFF) * 0.0722;
+    }
+
+    private static String formatMetric(double value) {
+        return String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    private static void sendCommand(Minecraft client, String command) {
+        client.player.connection.sendCommand(command);
     }
 
     private static void beginPerformancePreset(Minecraft client) {
@@ -773,7 +1174,11 @@ public final class SnapshotDevSmokeTest {
     }
 
     private static int timeoutForStage() {
-        return stage == 6 ? 700 : stage >= 60 && stage <= 62 ? 500 : stage >= 100 && stage <= 104 ? 800 : 400;
+        return stage == 6 ? 700
+            : stage >= 60 && stage <= 62 ? 500
+            : stage >= 100 && stage <= 104 ? 800
+            : stage >= 300 && stage <= 302 ? 800
+            : 400;
     }
 
     private static void initializeReport() {
@@ -1013,6 +1418,37 @@ public final class SnapshotDevSmokeTest {
                     errors.add("performance test is missing the " + preset.label() + " long exposure");
                 }
             }
+        } else if ("calibration".equalsIgnoreCase(TEST_CASE)) {
+            if (CALIBRATION_IMAGES.size() != CALIBRATION_SHOTS.size()) {
+                errors.add("calibration recorded " + CALIBRATION_IMAGES.size() + " labelled image(s), expected "
+                    + CALIBRATION_SHOTS.size());
+            }
+            if (CALIBRATION_AF_DISTANCES.size() != 2) {
+                errors.add("calibration did not record both selectable AF-point distances");
+            }
+        } else if ("highres".equalsIgnoreCase(TEST_CASE)) {
+            requireNameContaining(names, "_TILED_2X", errors);
+            JsonObject tiled = metadata.stream()
+                .filter(value -> value.has("capture_technique")
+                    && "TILED 2X".equals(value.get("capture_technique").getAsString()))
+                .findFirst().orElse(null);
+            if (tiled == null) {
+                errors.add("highres did not record TILED 2X metadata");
+            } else {
+                if (!tiled.has("tiled_high_resolution") || !tiled.get("tiled_high_resolution").getAsBoolean()) {
+                    errors.add("highres metadata did not identify a tiled high-resolution capture");
+                }
+                if (!tiled.has("stacked_frames") || tiled.get("stacked_frames").getAsInt() != 4) {
+                    errors.add("highres metadata did not record all four source tiles");
+                }
+                int minimumWidth = (int) Math.floor(highResolutionSourceWidth * 1.75);
+                int minimumHeight = (int) Math.floor(highResolutionSourceHeight * 1.75);
+                if (!tiled.has("width") || tiled.get("width").getAsInt() < minimumWidth
+                    || !tiled.has("height") || tiled.get("height").getAsInt() < minimumHeight) {
+                    errors.add("highres output was not substantially larger than its "
+                        + highResolutionSourceWidth + "x" + highResolutionSourceHeight + " framebuffer");
+                }
+            }
         }
         if (!EXPECTED_RENDERER.isBlank()) {
             for (JsonObject value : metadata) {
@@ -1053,7 +1489,8 @@ public final class SnapshotDevSmokeTest {
             case "suite" -> 4;
             case "astro2" -> 3;
             case "performance" -> 9;
-            case "focus", "image2map", "clock", "renderer", "access", "controls",
+            case "calibration" -> CALIBRATION_SHOTS.size();
+            case "focus", "image2map", "clock", "renderer", "highres", "access", "controls",
                 "multiplayer_denied", "multiplayer_allowed" -> 1;
             default -> 0;
         };
@@ -1134,6 +1571,19 @@ public final class SnapshotDevSmokeTest {
             SnapshotCameraController.toggle();
         }
         if (client.player != null && !isMultiplayerCase()) {
+            if (calibrationAnchor != null) {
+                int x = calibrationAnchor.getX();
+                int y = calibrationAnchor.getY();
+                int z = calibrationAnchor.getZ();
+                sendCommand(client, "kill @e[type=minecraft:pig,tag=snapshot_calibration]");
+                sendCommand(client, String.format(Locale.ROOT,
+                    "fill %d %d %d %d %d %d minecraft:air", x - 14, y - 2, z - 3, x + 14, y + 10, z + 34));
+                sendCommand(client, String.format(Locale.ROOT,
+                    "tp @s %.3f %.3f %.3f %.2f %.2f",
+                    calibrationReturnX, calibrationReturnY, calibrationReturnZ,
+                    calibrationReturnYaw, calibrationReturnPitch));
+                calibrationAnchor = null;
+            }
             if ("access".equalsIgnoreCase(TEST_CASE)) {
                 client.player.connection.sendCommand("gamemode creative @s");
             }
@@ -1160,6 +1610,33 @@ public final class SnapshotDevSmokeTest {
         return count;
     }
 
+    private static ItemStack firstItem(Minecraft client, Item item) {
+        if (client.player == null) {
+            return ItemStack.EMPTY;
+        }
+        for (int slot = 0; slot < client.player.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = client.player.getInventory().getItem(slot);
+            if (stack.getItem() == item) {
+                return stack;
+            }
+        }
+        return ItemStack.EMPTY;
+    }
+
     private record Evidence(int captureCount, int metadataCount, int sourceCount, List<String> errors) {
+    }
+
+    private record CalibrationShot(
+        String label,
+        int iso,
+        String shutter,
+        double aperture,
+        double focusDistance,
+        boolean autoFocus,
+        int focusPointX
+    ) {
+    }
+
+    private record ImageStats(double meanLuminance, double edgeEnergy) {
     }
 }

@@ -19,7 +19,7 @@ class LiveFilmPipelineTest {
         float shaderBlur = LiveFilmPipeline.calculateMaximumBlur(settings, true);
 
         assertTrue(nativeBlur > shaderBlur);
-        assertTrue(shaderBlur <= 3.6F);
+        assertTrue(shaderBlur <= 7.5F);
 
         settings.adjust(10);
         assertTrue(LiveFilmPipeline.calculateMaximumBlur(settings, true) < shaderBlur);

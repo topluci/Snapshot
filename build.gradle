@@ -126,6 +126,7 @@ jar {
     inputs.property "version", project.version
     from("LICENSE")
     from("README.md")
+    from("CHANGELOG.md")
     from("NOTICE.md")
     from("FONT_LICENSE.md")
     manifest {

@@ -49,6 +49,7 @@ public final class SnapshotEnvironmentPreview {
     }
 
     private static boolean enabled() {
-        return SnapshotCameraController.active() && SnapshotConfig.get().environmentPreview;
+        return SnapshotCameraController.active() && SnapshotConfig.get().environmentPreview
+            && SnapshotCameraController.environmentControlsAllowed();
     }
 }

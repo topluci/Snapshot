@@ -39,7 +39,8 @@ public final class CameraQuickMenuScreen extends Screen {
         extractor.fill(0, 0, width, height, 0x3A000000);
         drawDial(extractor, centerX, centerY, radius, options);
         extractor.centeredText(font, styled(page.label), centerX, centerY - 6, TEXT);
-        extractor.centeredText(font, styled("SCROLL: CATEGORY"), centerX, centerY + 8, MUTED);
+        String hint = page == Page.PRESET ? "CLICK LOAD / SHIFT+CLICK SAVE" : "SCROLL: CATEGORY";
+        extractor.centeredText(font, styled(hint), centerX, centerY + 8, MUTED);
         extractor.centeredText(font, styled("CAMERA COMMAND DIAL"), centerX, Math.max(12, centerY - radius - 34), TEXT);
         extractor.centeredText(font, styled(pageIndex()), centerX, Math.min(height - 18, centerY + radius + 25), MUTED);
         super.extractRenderState(extractor, mouseX, mouseY, partialTick);
@@ -73,7 +74,14 @@ public final class CameraQuickMenuScreen extends Screen {
         if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && hovered >= 0) {
             List<RadialOption> options = options();
             if (hovered < options.size()) {
-                options.get(hovered).action().run();
+                RadialOption option = options.get(hovered);
+                boolean shiftDown = InputConstants.isKeyDown(minecraft.getWindow(), InputConstants.KEY_LSHIFT)
+                    || InputConstants.isKeyDown(minecraft.getWindow(), InputConstants.KEY_RSHIFT);
+                if (shiftDown && option.saveAction() != null) {
+                    option.saveAction().run();
+                } else {
+                    option.action().run();
+                }
                 SnapshotCameraController.showCommandDial();
                 closeMenu();
                 return true;
@@ -97,7 +105,7 @@ public final class CameraQuickMenuScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
-        if (event.key() == InputConstants.KEY_K || event.key() == InputConstants.KEY_ESCAPE) {
+        if (event.key() == InputConstants.KEY_GRAVE || event.key() == InputConstants.KEY_ESCAPE) {
             closeMenu();
             return true;
         }
@@ -191,6 +199,23 @@ public final class CameraQuickMenuScreen extends Screen {
                         () -> settings.setExposureBracket(bracket)));
                 }
             }
+            case PRESET -> {
+                for (CameraPresetSlot slot : CameraPresetSlot.values()) {
+                    options.add(new RadialOption(slot.label(), CameraPresetStore.active(slot),
+                        () -> {
+                            CameraPresetStore.load(slot, settings);
+                            if (minecraft.player != null) {
+                                minecraft.player.sendOverlayMessage(Component.literal("Loaded " + slot.label() + " camera preset"));
+                            }
+                        },
+                        () -> {
+                            CameraPresetStore.save(slot, settings);
+                            if (minecraft.player != null) {
+                                minecraft.player.sendOverlayMessage(Component.literal("Saved " + slot.label() + " camera preset"));
+                            }
+                        }));
+                }
+            }
         }
         return options;
     }
@@ -234,7 +259,8 @@ public final class CameraQuickMenuScreen extends Screen {
         ASTRO("ASTRO"),
         SEQUENCE("SEQUENCE"),
         PRINT("PRINT"),
-        DRIVE("DRIVE");
+        DRIVE("DRIVE"),
+        PRESET("PRESETS");
 
         private final String label;
 
@@ -243,6 +269,9 @@ public final class CameraQuickMenuScreen extends Screen {
         }
     }
 
-    private record RadialOption(String label, boolean selected, Runnable action) {
+    private record RadialOption(String label, boolean selected, Runnable action, Runnable saveAction) {
+        private RadialOption(String label, boolean selected, Runnable action) {
+            this(label, selected, action, null);
+        }
     }
 }

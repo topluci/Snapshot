@@ -11,6 +11,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.renderer.RenderPipelines;
@@ -20,7 +22,9 @@ final class SnapshotImageReviewScreen extends Screen {
     private final Path imagePath;
     private final Screen previous;
     private final List<String> metadata = new ArrayList<>();
-    private SnapshotLighttableScreen.TextureEntry texture;
+    private SnapshotTextureLoader.TextureHandle texture;
+    private int loadGeneration;
+    private boolean loading;
 
     SnapshotImageReviewScreen(Path imagePath, Screen previous) {
         super(Component.literal("Snapshot Review"));
@@ -31,12 +35,31 @@ final class SnapshotImageReviewScreen extends Screen {
     @Override
     protected void init() {
         releaseTexture();
-        try {
-            texture = SnapshotLighttableScreen.loadTexture(imagePath, "review");
-            readMetadata();
-        } catch (IOException exception) {
-            SnapshotInit.LOGGER.warn("[Snapshot] Could not open photograph {}.", imagePath, exception);
+        metadata.clear();
+        addRenderableWidget(Button.builder(Component.literal("Trash..."), button -> confirmDelete())
+            .bounds(width - 92, 6, 80, 20)
+            .build());
+        loading = true;
+        int generation = loadGeneration;
+        SnapshotTextureLoader.decodeAsync(imagePath, 1024, true).whenComplete((decoded, throwable) ->
+            minecraft.execute(() -> finishLoad(generation, decoded, throwable))
+        );
+    }
+
+    private void finishLoad(int generation, SnapshotTextureLoader.DecodedImage decoded, Throwable throwable) {
+        if (generation != loadGeneration || minecraft.gui.screen() != this) {
+            if (decoded != null) {
+                decoded.close();
+            }
+            return;
         }
+        loading = false;
+        if (throwable != null) {
+            SnapshotInit.LOGGER.warn("[Snapshot] Could not open photograph {}.", imagePath, throwable);
+            return;
+        }
+        texture = SnapshotTextureLoader.register(decoded, "review");
+        readMetadata();
     }
 
     @Override
@@ -44,7 +67,7 @@ final class SnapshotImageReviewScreen extends Screen {
         extractor.fill(0, 0, width, height, 0xFA050607);
         if (texture != null) {
             int margin = 24;
-            int top = 22;
+            int top = 32;
             int metadataHeight = metadata.isEmpty() ? 24 : metadata.size() * 11 + 12;
             int availableWidth = width - margin * 2;
             int availableHeight = height - top - metadataHeight;
@@ -54,8 +77,11 @@ final class SnapshotImageReviewScreen extends Screen {
             int x = (width - drawWidth) / 2;
             int y = top + (availableHeight - drawHeight) / 2;
             extractor.blit(RenderPipelines.GUI_TEXTURED, texture.id(), x, y, 0.0F, 0.0F,
-                drawWidth, drawHeight, texture.width(), texture.height());
+                drawWidth, drawHeight, texture.width(), texture.height(), texture.width(), texture.height());
             extractor.outline(x - 1, y - 1, drawWidth + 2, drawHeight + 2, 0x5543D6DF);
+        } else if (loading) {
+            extractor.centeredText(font, SnapshotLighttableScreen.styled("LOADING PREVIEW"),
+                width / 2, height / 2, 0xFF9CA7AD);
         } else {
             extractor.centeredText(font, SnapshotLighttableScreen.styled("IMAGE UNAVAILABLE"), width / 2, height / 2, 0xFFFFD166);
         }
@@ -108,6 +134,10 @@ final class SnapshotImageReviewScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
+        if (event.key() == InputConstants.KEY_M) {
+            minecraft.setScreenAndShow(null);
+            return true;
+        }
         if (event.key() == InputConstants.KEY_F) {
             PhotoMetadataStore.toggleFavorite(imagePath);
             readMetadata();
@@ -124,11 +154,22 @@ final class SnapshotImageReviewScreen extends Screen {
             return true;
         }
         if (event.key() == InputConstants.KEY_DELETE || event.key() == InputConstants.KEY_BACKSPACE) {
-            PhotoMetadataStore.delete(imagePath);
-            minecraft.setScreenAndShow(previous);
+            confirmDelete();
             return true;
         }
         return super.keyPressed(event);
+    }
+
+    private void confirmDelete() {
+        minecraft.setScreenAndShow(new ConfirmScreen(confirmed -> {
+            if (confirmed) {
+                SnapshotTrashStore.moveToTrash(imagePath);
+                minecraft.setScreenAndShow(previous);
+            } else {
+                minecraft.setScreenAndShow(this);
+            }
+        }, Component.literal("Move photograph to trash?"),
+            Component.literal(imagePath.getFileName() + " can be restored from Camera Roll / Trash.")));
     }
 
     @Override
@@ -138,8 +179,10 @@ final class SnapshotImageReviewScreen extends Screen {
     }
 
     private void releaseTexture() {
+        loadGeneration++;
+        loading = false;
         if (texture != null) {
-            minecraft.getTextureManager().release(texture.id());
+            SnapshotTextureLoader.release(minecraft, texture);
             texture = null;
         }
     }

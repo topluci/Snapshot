@@ -7,6 +7,10 @@
   "authors": [
     "luci"
   ],
+  "contact": {
+    "homepage": "https://modrinth.com/project/snapshotphoto",
+    "issues": "https://github.com/topluci/Snapshot/issues"
+  },
   "license": "LicenseRef-All-Rights-Reserved",
   "icon": "assets/snapshot/icon.png",
   "environment": "*",

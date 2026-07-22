@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -20,14 +21,16 @@ final class SnapshotMapPhotos {
     private SnapshotMapPhotos() {
     }
 
-    static ItemStack create(ServerPlayer player, CapturePhotoPayload payload) {
+    static CreatedMap create(ServerPlayer player, CapturePhotoPayload payload) {
         ServerLevel level = player.level();
         ItemStack stack = MapItem.create(level, (int) player.getX(), (int) player.getZ(), (byte) 0, false, false);
         MapId mapId = stack.get(DataComponents.MAP_ID);
         MapItemSavedData data = MapItem.getSavedData(stack, level);
+        byte[] colors = thumbnailColors(payload.thumbnail());
         if (data != null && mapId != null) {
-            writeThumbnail(data, payload.thumbnail());
+            writeThumbnail(data, colors);
             level.setMapData(mapId, data.locked());
+            data = MapItem.getSavedData(mapId, level);
         }
 
         stack.set(DataComponents.CUSTOM_NAME, Component.literal(payload.title() + " - Photo Map"));
@@ -36,13 +39,25 @@ final class SnapshotMapPhotos {
             Component.literal(payload.settings()),
             Component.literal(payload.pngExported() ? "PNG exported locally to screenshots/snapshot" : "Snapshot in-game map photo")
         )));
-        return stack;
+        return new CreatedMap(stack, mapId, data, colors);
     }
 
-    private static void writeThumbnail(MapItemSavedData data, byte[] thumbnail) {
+    static void syncTo(ServerPlayer player, CreatedMap createdMap) {
+        if (createdMap.mapId() == null || createdMap.data() == null) {
+            return;
+        }
+        createdMap.data().getHoldingPlayer(player);
+        Packet<?> packet = createdMap.data().getUpdatePacket(createdMap.mapId(), player);
+        if (packet != null) {
+            player.connection.send(packet);
+        }
+    }
+
+    private static byte[] thumbnailColors(byte[] thumbnail) {
+        byte[] colors = new byte[MAP_SIZE * MAP_SIZE];
         int side = thumbnailSide(thumbnail);
         if (side <= 0 || PALETTE.isEmpty()) {
-            return;
+            return colors;
         }
 
         for (int y = 0; y < MAP_SIZE; y++) {
@@ -52,15 +67,20 @@ final class SnapshotMapPhotos {
                 int offset = (sourceY * side + sourceX) * 4;
                 int alpha = thumbnail[offset + 3] & 0xFF;
                 if (alpha < 16) {
-                    data.setColor(x, y, (byte) 0);
                     continue;
                 }
-
-                data.setColor(
-                    x,
-                    y,
-                    closestColor(thumbnail[offset] & 0xFF, thumbnail[offset + 1] & 0xFF, thumbnail[offset + 2] & 0xFF)
+                colors[y * MAP_SIZE + x] = closestColor(
+                    thumbnail[offset] & 0xFF, thumbnail[offset + 1] & 0xFF, thumbnail[offset + 2] & 0xFF
                 );
+            }
+        }
+        return colors;
+    }
+
+    private static void writeThumbnail(MapItemSavedData data, byte[] colors) {
+        for (int y = 0; y < MAP_SIZE; y++) {
+            for (int x = 0; x < MAP_SIZE; x++) {
+                data.setColor(x, y, colors[y * MAP_SIZE + x]);
             }
         }
     }
@@ -109,5 +129,8 @@ final class SnapshotMapPhotos {
     }
 
     private record PaletteEntry(byte packedId, int red, int green, int blue) {
+    }
+
+    record CreatedMap(ItemStack stack, MapId mapId, MapItemSavedData data, byte[] colors) {
     }
 }

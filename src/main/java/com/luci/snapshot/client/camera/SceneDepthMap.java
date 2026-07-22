@@ -1,7 +1,10 @@
 package com.luci.snapshot.client.camera;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -15,6 +18,13 @@ final class SceneDepthMap {
         this.width = width;
         this.height = height;
         this.distances = distances;
+    }
+
+    static SceneDepthMap synthetic(int width, int height, double... distances) {
+        if (width <= 0 || height <= 0 || distances.length != width * height) {
+            throw new IllegalArgumentException("Depth fixture dimensions do not match its samples.");
+        }
+        return new SceneDepthMap(width, height, distances.clone());
     }
 
     static SceneDepthMap capture(Minecraft client, CameraSettings settings) {
@@ -52,8 +62,26 @@ final class SceneDepthMap {
                     .add(rolledUp.scale(screenY * verticalScale))
                     .normalize();
                 Vec3 end = origin.add(direction.scale(MAX_DISTANCE));
-                HitResult hit = client.level.clip(new ClipContext(origin, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, client.player));
-                depths[y * width + x] = hit.getType() == HitResult.Type.MISS ? MAX_DISTANCE : origin.distanceTo(hit.getLocation());
+                HitResult blockHit = client.level.clip(
+                    new ClipContext(origin, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, client.player)
+                );
+                double blockDistance = blockHit.getType() == HitResult.Type.MISS
+                    ? MAX_DISTANCE * MAX_DISTANCE : origin.distanceToSqr(blockHit.getLocation());
+                AABB searchBounds = client.player.getBoundingBox().expandTowards(direction.scale(MAX_DISTANCE)).inflate(1.0);
+                EntityHitResult entityHit = ProjectileUtil.getEntityHitResult(
+                    client.level,
+                    client.player,
+                    origin,
+                    end,
+                    searchBounds,
+                    entity -> !entity.isSpectator() && entity.isPickable(),
+                    0.3F
+                );
+                double distance = blockDistance;
+                if (entityHit != null) {
+                    distance = Math.min(distance, origin.distanceToSqr(entityHit.getLocation()));
+                }
+                depths[y * width + x] = Math.sqrt(distance);
             }
         }
         return new SceneDepthMap(width, height, depths);
@@ -68,8 +96,19 @@ final class SceneDepthMap {
         int y1 = Math.min(height - 1, y0 + 1);
         double tx = x - x0;
         double ty = y - y0;
-        double top = mix(distances[y0 * width + x0], distances[y0 * width + x1], tx);
-        double bottom = mix(distances[y1 * width + x0], distances[y1 * width + x1], tx);
+        double topLeft = distances[y0 * width + x0];
+        double topRight = distances[y0 * width + x1];
+        double bottomLeft = distances[y1 * width + x0];
+        double bottomRight = distances[y1 * width + x1];
+        double minimum = Math.min(Math.min(topLeft, topRight), Math.min(bottomLeft, bottomRight));
+        double maximum = Math.max(Math.max(topLeft, topRight), Math.max(bottomLeft, bottomRight));
+        if (maximum - minimum > Math.max(1.0, minimum * 0.10)) {
+            int nearestX = tx < 0.5 ? x0 : x1;
+            int nearestY = ty < 0.5 ? y0 : y1;
+            return distances[nearestY * width + nearestX];
+        }
+        double top = mix(topLeft, topRight, tx);
+        double bottom = mix(bottomLeft, bottomRight, tx);
         return mix(top, bottom, ty);
     }
 

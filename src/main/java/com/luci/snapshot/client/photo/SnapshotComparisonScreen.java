@@ -2,10 +2,11 @@ package com.luci.snapshot.client.photo;
 
 import com.google.gson.JsonObject;
 import com.luci.snapshot.SnapshotInit;
-import java.io.IOException;
+import com.mojang.blaze3d.platform.InputConstants;
 import java.nio.file.Path;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 
@@ -13,8 +14,9 @@ final class SnapshotComparisonScreen extends Screen {
     private final Path leftPath;
     private final Path rightPath;
     private final Screen previous;
-    private SnapshotLighttableScreen.TextureEntry leftTexture;
-    private SnapshotLighttableScreen.TextureEntry rightTexture;
+    private SnapshotTextureLoader.TextureHandle leftTexture;
+    private SnapshotTextureLoader.TextureHandle rightTexture;
+    private int loadGeneration;
 
     SnapshotComparisonScreen(Path leftPath, Path rightPath, Screen previous) {
         super(Component.literal("Snapshot Comparison"));
@@ -26,12 +28,32 @@ final class SnapshotComparisonScreen extends Screen {
     @Override
     protected void init() {
         releaseTextures();
-        try {
-            leftTexture = SnapshotLighttableScreen.loadTexture(leftPath, "compare_left");
-            rightTexture = SnapshotLighttableScreen.loadTexture(rightPath, "compare_right");
-        } catch (IOException exception) {
-            SnapshotInit.LOGGER.warn("[Snapshot] Could not load comparison images.", exception);
-        }
+        int generation = loadGeneration;
+        loadTexture(leftPath, "compare_left", generation, true);
+        loadTexture(rightPath, "compare_right", generation, false);
+    }
+
+    private void loadTexture(Path path, String group, int generation, boolean left) {
+        SnapshotTextureLoader.decodeAsync(path, 768, true).whenComplete((decoded, throwable) ->
+            minecraft.execute(() -> {
+                if (generation != loadGeneration || minecraft.gui.screen() != this) {
+                    if (decoded != null) {
+                        decoded.close();
+                    }
+                    return;
+                }
+                if (throwable != null) {
+                    SnapshotInit.LOGGER.warn("[Snapshot] Could not load comparison image {}.", path, throwable);
+                    return;
+                }
+                SnapshotTextureLoader.TextureHandle texture = SnapshotTextureLoader.register(decoded, group);
+                if (left) {
+                    leftTexture = texture;
+                } else {
+                    rightTexture = texture;
+                }
+            })
+        );
     }
 
     @Override
@@ -47,7 +69,7 @@ final class SnapshotComparisonScreen extends Screen {
         super.extractRenderState(extractor, mouseX, mouseY, partialTick);
     }
 
-    private void drawImage(GuiGraphicsExtractor extractor, SnapshotLighttableScreen.TextureEntry texture,
+    private void drawImage(GuiGraphicsExtractor extractor, SnapshotTextureLoader.TextureHandle texture,
                            Path path, int x, int y, int areaWidth, int areaHeight) {
         if (texture == null) {
             return;
@@ -58,7 +80,7 @@ final class SnapshotComparisonScreen extends Screen {
         int drawX = x + (areaWidth - drawWidth) / 2;
         int drawY = y + (areaHeight - drawHeight) / 2;
         extractor.blit(RenderPipelines.GUI_TEXTURED, texture.id(), drawX, drawY, 0.0F, 0.0F,
-            drawWidth, drawHeight, texture.width(), texture.height());
+            drawWidth, drawHeight, texture.width(), texture.height(), texture.width(), texture.height());
         extractor.outline(drawX - 1, drawY - 1, drawWidth + 2, drawHeight + 2, 0x5543D6DF);
         JsonObject metadata = PhotoMetadataStore.read(path);
         String score = metadata.has("composition_score") ? "  SCORE " + metadata.get("composition_score").getAsInt() : "";
@@ -69,6 +91,15 @@ final class SnapshotComparisonScreen extends Screen {
     @Override
     public void onClose() {
         minecraft.setScreenAndShow(previous);
+    }
+
+    @Override
+    public boolean keyPressed(KeyEvent event) {
+        if (event.key() == InputConstants.KEY_M) {
+            minecraft.setScreenAndShow(null);
+            return true;
+        }
+        return super.keyPressed(event);
     }
 
     @Override
@@ -83,12 +114,13 @@ final class SnapshotComparisonScreen extends Screen {
     }
 
     private void releaseTextures() {
+        loadGeneration++;
         if (leftTexture != null) {
-            minecraft.getTextureManager().release(leftTexture.id());
+            SnapshotTextureLoader.release(minecraft, leftTexture);
             leftTexture = null;
         }
         if (rightTexture != null) {
-            minecraft.getTextureManager().release(rightTexture.id());
+            SnapshotTextureLoader.release(minecraft, rightTexture);
             rightTexture = null;
         }
     }

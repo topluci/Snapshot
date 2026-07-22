@@ -60,6 +60,7 @@ public final class FocusPointSelectorScreen extends Screen {
             && hoveredColumn >= -1 && hoveredColumn <= 1 && hoveredRow >= -1 && hoveredRow <= 1) {
             CameraSettings settings = SnapshotCameraController.settings();
             settings.setFocusPoint(hoveredColumn, hoveredRow);
+            settings.setAutoFocus(true);
             settings.select(CameraControl.FOCUS_POINT);
             SnapshotCameraController.requestAutofocus();
             minecraft.setScreenAndShow(null);

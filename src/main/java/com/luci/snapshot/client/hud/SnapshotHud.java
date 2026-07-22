@@ -8,10 +8,13 @@ import com.luci.snapshot.client.camera.ExposureAnalysis;
 import com.luci.snapshot.client.camera.ExposureAssist;
 import com.luci.snapshot.client.camera.SnapshotCameraController;
 import com.luci.snapshot.client.compat.ShaderCompatibility;
+import com.luci.snapshot.client.input.SnapshotKeybinds;
+import com.luci.snapshot.config.SnapshotConfig;
 import java.util.Locale;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.network.chat.Component;
@@ -47,25 +50,27 @@ public final class SnapshotHud {
         hideWhileViewfinder(VanillaHudElements.BOSS_BAR);
         hideWhileViewfinder(VanillaHudElements.OVERLAY_MESSAGE);
         hideWhileViewfinder(VanillaHudElements.SCOREBOARD);
+        hideWhileViewfinder(VanillaHudElements.CHAT);
         HudElementRegistry.addLast(HUD_ID, SnapshotHud::extract);
     }
 
     private static void hideWhileViewfinder(Identifier id) {
         HudElementRegistry.replaceElement(id, original -> (extractor, deltaTracker) -> {
-            if (!SnapshotCameraController.active()) {
+            if (!SnapshotCameraController.viewfinderHudVisible()) {
                 original.extractRenderState(extractor, deltaTracker);
             }
         });
     }
 
     private static void extract(GuiGraphicsExtractor extractor, net.minecraft.client.DeltaTracker deltaTracker) {
-        if (!SnapshotCameraController.active()) {
+        if (!SnapshotCameraController.viewfinderHudVisible()) {
             return;
         }
 
         Minecraft client = Minecraft.getInstance();
         CameraSettings settings = SnapshotCameraController.settings();
-        float scale = SnapshotCameraController.hudExpanded() ? 0.62F : 0.55F;
+        float configuredScale = SnapshotConfig.get().hudScale / 100.0F;
+        float scale = (SnapshotCameraController.hudExpanded() ? 0.62F : 0.55F) * configuredScale;
         int width = Math.round(extractor.guiWidth() / scale);
         int height = Math.round(extractor.guiHeight() / scale);
 
@@ -83,6 +88,7 @@ public final class SnapshotHud {
         drawCommandDial(extractor, client.font, width, settings);
         drawCornerReadouts(extractor, client.font, client, width, settings);
         drawBottomBar(extractor, client.font, width, height, settings);
+        drawControlHints(extractor, client.font, height);
         if (SnapshotCameraController.hudExpanded()) {
             drawExpandedPanel(extractor, client.font, client, width, height, settings);
         }
@@ -145,7 +151,8 @@ public final class SnapshotHud {
                     if (assist == ExposureAssist.ZEBRAS && luminance >= 246 && ((gridX + gridY) & 1) == 0) {
                         extractor.fill(left, top, left + cellWidth, top + cellHeight, 0x2CFFFFFF);
                     } else if (assist == ExposureAssist.FALSE_COLOR) {
-                        extractor.fill(left, top, left + cellWidth, top + cellHeight, falseColor(luminance));
+                        extractor.fill(left, top, left + cellWidth, top + cellHeight,
+                            falseColor(luminance, SnapshotConfig.get().falseColorPalette));
                     }
                 }
             }
@@ -193,7 +200,27 @@ public final class SnapshotHud {
         extractor.outline(x, y, width, height, 0x55FFFFFF);
     }
 
-    private static int falseColor(int luminance) {
+    private static int falseColor(int luminance, int palette) {
+        if (palette == 1) {
+            if (luminance < 18) return 0x443743FF;
+            if (luminance < 55) return 0x444D87D8;
+            if (luminance < 115) return 0x443FD4C4;
+            if (luminance < 180) return 0x44F2D35F;
+            if (luminance < 235) return 0x44F39C3D;
+            return 0x55FFF4D6;
+        }
+        if (palette == 2) {
+            int value = Math.max(32, Math.min(255, luminance));
+            return 0x44000000 | value << 16 | value << 8 | value;
+        }
+        if (palette == 3) {
+            if (luminance < 18) return 0x550026FF;
+            if (luminance < 55) return 0x5500A8FF;
+            if (luminance < 115) return 0x5500FFD5;
+            if (luminance < 180) return 0x55FFF200;
+            if (luminance < 235) return 0x55FF7A00;
+            return 0x55FF2FD2;
+        }
         if (luminance < 18) {
             return 0x44334CFF;
         }
@@ -319,7 +346,10 @@ public final class SnapshotHud {
     }
 
     private static void drawFocusPeaking(GuiGraphicsExtractor extractor, int centerX, int centerY) {
-        int peak = 0xAAFF4D57;
+        int[] colors = {0xFF2EF2DB, 0xFFFFD11F, 0xFF40B8FF, 0xFFFF4DB3};
+        int base = colors[Math.max(0, Math.min(colors.length - 1, SnapshotConfig.get().focusPeakingPalette))];
+        int alpha = Math.round(0xCC * SnapshotConfig.get().focusPeakingStrength / 100.0F);
+        int peak = alpha << 24 | base & 0xFFFFFF;
         extractor.horizontalLine(centerX - 42, centerX - 34, centerY - 15, peak);
         extractor.horizontalLine(centerX + 34, centerX + 42, centerY - 15, peak);
         extractor.horizontalLine(centerX - 36, centerX - 28, centerY + 17, peak);
@@ -353,7 +383,8 @@ public final class SnapshotHud {
         drawText(extractor, font, settings.whiteBalance() + " K", x + 14, y, selectedColor(settings, CameraControl.WHITE_BALANCE));
         String focusLock = SnapshotCameraController.afLocked() ? "  AF-L" : "";
         drawText(extractor, font, (settings.autoFocus() ? "AF-S  " : "MF  ") + settings.focusDistanceLabel() + focusLock, x, y + 12,
-            selectedColor(settings, CameraControl.FOCUS_DISTANCE));
+            settings.selected() == CameraControl.FOCUS_MODE || settings.selected() == CameraControl.FOCUS_DISTANCE
+                ? WARNING : TEXT);
         String lock = SnapshotCameraController.aeLocked() ? "  AE-L" : "";
         drawText(extractor, font, settings.meteringMode().label() + lock, x, y + 24,
             selectedColor(settings, CameraControl.METERING));
@@ -376,17 +407,26 @@ public final class SnapshotHud {
             : settings.burst() ? "BURST" : "ONE SHOT";
         drawRightText(extractor, font, drive, width - 15, y + 48, MUTED);
         drawRightText(extractor, font, ShaderCompatibility.rendererLabel().toUpperCase(Locale.ROOT), width - 15, y + 60, MUTED);
+        int statusY = y + 72;
         if (SnapshotCameraController.liveFilmActive()) {
-            drawRightText(extractor, font, "LIVE DEPTH OPTICS", width - 15, y + 72, LOCKED);
+            drawRightText(extractor, font, "LIVE DEPTH OPTICS", width - 15, statusY, LOCKED);
+            statusY += 12;
+            int renderScale = SnapshotCameraController.liveOpticsRenderScalePercent();
+            int sampleQuality = SnapshotCameraController.liveOpticsQualityPercent();
+            if (renderScale < 100 || sampleQuality < 100) {
+                drawRightText(extractor, font, "DOF " + renderScale + "%  TAPS " + sampleQuality + "%",
+                    width - 15, statusY, MUTED);
+                statusY += 12;
+            }
         }
         if (settings.astrophotography()) {
             String astro = settings.astroStackMode().label()
                 + (settings.darkFrameSubtraction() ? "  DARK" : "");
-            drawRightText(extractor, font, astro, width - 15, y + 84, settings.redNightVision() ? 0xFFE86A6A : WARNING);
+            drawRightText(extractor, font, astro, width - 15, statusY, settings.redNightVision() ? 0xFFE86A6A : WARNING);
+            statusY += 12;
         }
         if (!SnapshotCameraController.intervalometerLabel().isEmpty()) {
-            drawRightText(extractor, font, SnapshotCameraController.intervalometerLabel(), width - 15,
-                y + (settings.astrophotography() ? 96 : 84), WARNING);
+            drawRightText(extractor, font, SnapshotCameraController.intervalometerLabel(), width - 15, statusY, WARNING);
         }
     }
 
@@ -436,9 +476,9 @@ public final class SnapshotHud {
         drawReadout(extractor, font, settings.exposureMode().label(), 15, baseline, 22,
             settings.selected() == CameraControl.EXPOSURE_MODE);
         drawReadout(extractor, font, settings.shutter(), 43, baseline, 52, settings.selected() == CameraControl.SHUTTER);
-        drawReadout(extractor, font, "f/" + settings.aperture(), 103, baseline, 50, settings.selected() == CameraControl.APERTURE);
-        drawReadout(extractor, font, (settings.autoIso() ? "A-ISO " : "ISO ") + settings.iso(), 161, baseline, 72,
+        drawReadout(extractor, font, (settings.autoIso() ? "A-ISO " : "ISO ") + settings.iso(), 103, baseline, 72,
             settings.selected() == CameraControl.ISO || settings.selected() == CameraControl.AUTO_ISO);
+        drawReadout(extractor, font, "f/" + settings.aperture(), 183, baseline, 50, settings.selected() == CameraControl.APERTURE);
 
         int meterWidth = Math.min(150, Math.max(96, width / 5));
         int meterX = width / 2 - meterWidth / 2;
@@ -448,7 +488,39 @@ public final class SnapshotHud {
         drawReadout(extractor, font, settings.focalLength() + "mm", width - 148, baseline, 64,
             settings.selected() == CameraControl.FOCAL_LENGTH);
         drawReadout(extractor, font, af, width - 76, baseline, 61,
-            settings.selected() == CameraControl.FOCUS_DISTANCE);
+            settings.selected() == CameraControl.FOCUS_MODE || settings.selected() == CameraControl.FOCUS_DISTANCE);
+    }
+
+    private static void drawControlHints(GuiGraphicsExtractor extractor, Font font, int height) {
+        int x = 15;
+        int y = height - 49;
+        x = drawKeyHint(extractor, font,
+            key(SnapshotKeybinds.previousControl()) + "/" + key(SnapshotKeybinds.nextControl()), "SELECT", x, y);
+        x = drawKeyHint(extractor, font,
+            key(SnapshotKeybinds.decrease()) + "/" + key(SnapshotKeybinds.increase()), "ADJUST", x, y);
+        x = drawKeyHint(extractor, font, "LMB/" + key(SnapshotKeybinds.capture()), "SHUTTER", x, y);
+        x = drawKeyHint(extractor, font, "RMB", "FOCUS", x, y);
+        x = drawKeyHint(extractor, font, key(SnapshotKeybinds.quickMenu()), "DIAL", x, y);
+        drawKeyHint(extractor, font, key(SnapshotKeybinds.toggleHudSize()), "HUD", x, y);
+    }
+
+    private static int drawKeyHint(GuiGraphicsExtractor extractor, Font font, String key, String label, int x, int y) {
+        Component keyText = styled(key.toUpperCase(Locale.ROOT));
+        int keyWidth = font.width(keyText) + 6;
+        extractor.fill(x, y - 2, x + keyWidth, y + 10, 0x52000000);
+        extractor.outline(x, y - 2, keyWidth, 12, 0x55FFFFFF);
+        extractor.text(font, keyText, x + 3, y, WARNING, true);
+        Component labelText = styled(label);
+        extractor.text(font, labelText, x + keyWidth + 4, y, MUTED, true);
+        return x + keyWidth + font.width(labelText) + 13;
+    }
+
+    private static String key(KeyMapping mapping) {
+        String value = mapping.getTranslatedKeyMessage().getString();
+        if ("`".equals(value) || value.toLowerCase(Locale.ROOT).contains("grave")) {
+            return "GRAVE";
+        }
+        return "=".equals(value) ? "+" : value;
     }
 
     private static void drawReadout(GuiGraphicsExtractor extractor, Font font, String value, int x, int y, int width, boolean selected) {
@@ -492,7 +564,8 @@ public final class SnapshotHud {
         drawText(extractor, font, "WB " + settings.whiteBalance() + "K", x + 8, y + 50, selectedColor(settings, CameraControl.WHITE_BALANCE));
         drawText(extractor, font, settings.focalLength() + "mm", x + 76, y + 50, selectedColor(settings, CameraControl.FOCAL_LENGTH));
         drawText(extractor, font, settings.autoFocus() ? "AF " + settings.focusDistanceLabel() : "MF " + settings.focusDistanceLabel(), x + 123, y + 50,
-            selectedColor(settings, CameraControl.FOCUS_DISTANCE));
+            settings.selected() == CameraControl.FOCUS_MODE || settings.selected() == CameraControl.FOCUS_DISTANCE
+                ? WARNING : TEXT);
         drawRightText(extractor, font, settings.filter().label(), x + panelWidth - 8, y + 50, selectedColor(settings, CameraControl.FILTER));
 
         String line = settings.filmProfile().label() + "   " + settings.aspectRatio().label()
@@ -542,12 +615,18 @@ public final class SnapshotHud {
     }
 
     private static void drawText(GuiGraphicsExtractor extractor, Font font, String value, int x, int y, int color) {
-        extractor.text(font, styled(value), x, y, color, true);
+        extractor.text(font, styled(value), x, y, hudOpacity(color), true);
     }
 
     private static void drawRightText(GuiGraphicsExtractor extractor, Font font, String value, int right, int y, int color) {
         Component text = styled(value);
-        extractor.text(font, text, right - font.width(text), y, color, true);
+        extractor.text(font, text, right - font.width(text), y, hudOpacity(color), true);
+    }
+
+    private static int hudOpacity(int color) {
+        int alpha = color >>> 24;
+        int adjusted = Math.max(1, Math.round(alpha * SnapshotConfig.get().hudOpacity / 100.0F));
+        return adjusted << 24 | color & 0xFFFFFF;
     }
 
     private static Component styled(String value) {

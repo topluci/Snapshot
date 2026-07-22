@@ -15,14 +15,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class GameRendererMixin {
     @Inject(method = "renderItemInHand", at = @At("HEAD"), cancellable = true)
     private void snapshot$hideHandsInViewfinder(CameraRenderState cameraRenderState, float tickProgress, Matrix4fc projectionMatrix, CallbackInfo ci) {
-        if (SnapshotCameraController.active()) {
+        if (SnapshotCameraController.viewfinderRendering()) {
             ci.cancel();
         }
     }
 
     @Inject(method = "bobView", at = @At("HEAD"), cancellable = true)
     private void snapshot$steadyViewfinder(CameraRenderState cameraRenderState, PoseStack poseStack, CallbackInfo ci) {
-        if (SnapshotCameraController.active()) {
+        if (SnapshotCameraController.viewfinderRendering()) {
             ci.cancel();
         }
     }

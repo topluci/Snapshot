@@ -14,6 +14,7 @@ class CameraSettingsTest {
     void defaultsMatchTheDocumentedCamera() {
         CameraSettings settings = new CameraSettings();
 
+        assertEquals(CameraControl.EXPOSURE_MODE, settings.selected());
         assertEquals(100, settings.iso());
         assertEquals("1/125", settings.shutter());
         assertEquals(1.8, settings.apertureNumber(), EPSILON);
@@ -28,6 +29,37 @@ class CameraSettingsTest {
         assertTrue(settings.autoFocus());
         assertTrue(settings.autoIso());
         assertFalse(settings.astrophotography());
+    }
+
+    @Test
+    void commandDialFollowsThePhysicalCameraControlOrder() {
+        CameraSettings settings = new CameraSettings();
+        CameraControl[] expected = {
+            CameraControl.EXPOSURE_MODE,
+            CameraControl.SHUTTER,
+            CameraControl.ISO,
+            CameraControl.APERTURE,
+            CameraControl.EXPOSURE_COMPENSATION,
+            CameraControl.FOCAL_LENGTH,
+            CameraControl.FOCUS_MODE,
+            CameraControl.FOCUS_DISTANCE,
+            CameraControl.FOCUS_POINT
+        };
+
+        for (CameraControl control : expected) {
+            assertEquals(control, settings.selected());
+            settings.selectNext();
+        }
+
+        settings.select(CameraControl.FOCUS_MODE);
+        settings.adjust(1);
+        assertFalse(settings.autoFocus());
+        settings.adjust(-1);
+        assertTrue(settings.autoFocus());
+
+        settings.adjustRoll(14.0);
+        settings.resetRoll();
+        assertEquals(0.0, settings.rollDegrees(), EPSILON);
     }
 
     @Test

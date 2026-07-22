@@ -15,7 +15,7 @@ public class ItemInHandRendererMixin {
     @Inject(method = "submitHandsWithItems", at = @At("HEAD"), cancellable = true)
     private void snapshot$hideSubmittedHands(float partialTick, PoseStack poseStack, SubmitNodeCollector collector,
                                              LocalPlayer player, int packedLight, CallbackInfo ci) {
-        if (SnapshotCameraController.active()) {
+        if (SnapshotCameraController.viewfinderRendering()) {
             ci.cancel();
         }
     }

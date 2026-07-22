@@ -36,6 +36,8 @@ public final class SnapshotKeybinds {
     private static KeyMapping focusPointSelector;
     private static KeyMapping aeLock;
     private static KeyMapping afLock;
+    private static KeyMapping mouseFocus;
+    private static KeyMapping mouseShutter;
 
     private SnapshotKeybinds() {
     }
@@ -65,6 +67,8 @@ public final class SnapshotKeybinds {
         focusPointSelector = register("key.snapshot.focus_point_selector", InputConstants.KEY_X);
         aeLock = register("key.snapshot.ae_lock", InputConstants.KEY_LBRACKET);
         afLock = register("key.snapshot.af_lock", InputConstants.KEY_RBRACKET);
+        mouseFocus = registerMouse("key.snapshot.mouse_focus", InputConstants.MOUSE_BUTTON_RIGHT);
+        mouseShutter = registerMouse("key.snapshot.mouse_shutter", InputConstants.MOUSE_BUTTON_LEFT);
     }
 
     public static KeyMapping toggle() {
@@ -163,8 +167,57 @@ public final class SnapshotKeybinds {
         return afLock;
     }
 
+    public static boolean matchesFocusMouse(int button) {
+        InputConstants.Key key = KeyMappingHelper.getBoundKeyOf(mouseFocus);
+        return key.getType() == InputConstants.Type.MOUSE && key.getValue() == button;
+    }
+
+    public static boolean matchesShutterMouse(int button) {
+        InputConstants.Key key = KeyMappingHelper.getBoundKeyOf(mouseShutter);
+        return key.getType() == InputConstants.Type.MOUSE && key.getValue() == button;
+    }
+
+    public static void discardGameplayClicks() {
+        drain(toggle);
+        drain(capture);
+        drain(nextControl);
+        drain(previousControl);
+        drain(increase);
+        drain(decrease);
+        drain(autofocus);
+        drain(flash);
+        drain(burst);
+        drain(reset);
+        drain(toggleHudSize);
+        drain(tutorial);
+        drain(applyEnvironment);
+        drain(filmProfile);
+        drain(aspectRatio);
+        drain(mood);
+        drain(lighttable);
+        drain(exposureMode);
+        drain(exposureAssist);
+        drain(astrophotography);
+        drain(quickMenu);
+        drain(focusPointSelector);
+        drain(aeLock);
+        drain(afLock);
+        drain(mouseFocus);
+        drain(mouseShutter);
+    }
+
     private static KeyMapping register(String translationKey, int key) {
         return KeyMappingHelper.registerKeyMapping(new KeyMapping(translationKey, InputConstants.Type.KEYSYM, key, CATEGORY));
+    }
+
+    private static KeyMapping registerMouse(String translationKey, int button) {
+        return KeyMappingHelper.registerKeyMapping(new KeyMapping(translationKey, InputConstants.Type.MOUSE, button, CATEGORY));
+    }
+
+    private static void drain(KeyMapping mapping) {
+        while (mapping.consumeClick()) {
+            // Discard clicks queued while another screen owns keyboard input.
+        }
     }
 
     public static void migrateLegacyBindings(Minecraft client) {

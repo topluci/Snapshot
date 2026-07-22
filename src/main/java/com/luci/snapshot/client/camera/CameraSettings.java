@@ -22,7 +22,7 @@ public final class CameraSettings {
     private static final double ASTRO_REFERENCE_STOPS = log2(1600.0 / 100.0)
         + log2(2.0 / (1.0 / 125.0));
 
-    private CameraControl selected = CameraControl.APERTURE;
+    private CameraControl selected = CameraControl.EXPOSURE_MODE;
     private int isoIndex = 1;
     private int shutterIndex = 6;
     private int apertureIndex = 2;
@@ -91,9 +91,14 @@ public final class CameraSettings {
             case CAPTURE_TECHNIQUE -> captureTechnique = captureTechnique.shift(direction);
             case FOCAL_LENGTH -> adjustFocalLength(direction * 5.0);
             case LENS -> selectLens(lens.shift(direction));
+            case FOCUS_MODE -> {
+                if (direction != 0) {
+                    autoFocus = !autoFocus;
+                }
+            }
             case FOCUS_DISTANCE -> {
                 autoFocus = false;
-                focusDistance = clamp(focusDistance + direction * 0.5, lens.minimumFocusDistance(), 256.0);
+                adjustFocusDistance(direction);
             }
             case FOCUS_POINT -> focusPointIndex = Math.floorMod(focusPointIndex + Integer.signum(direction), 9);
             case EXPOSURE_COMPENSATION -> exposureCompensation = clamp(exposureCompensation + direction, -6, 6);
@@ -123,6 +128,18 @@ public final class CameraSettings {
 
     public void adjustRoll(double amount) {
         rollDegrees = clamp(rollDegrees + amount, -30.0, 30.0);
+    }
+
+    public void resetRoll() {
+        rollDegrees = 0.0;
+    }
+
+    private void adjustFocusDistance(int direction) {
+        double step = focusDistance < 2.0 ? 0.10
+            : focusDistance < 10.0 ? 0.50
+            : focusDistance < 50.0 ? 2.0 : 10.0;
+        focusDistance = clamp(focusDistance + Integer.signum(direction) * step,
+            lens.minimumFocusDistance(), 256.0);
     }
 
     public void cycleFilmProfile() {
@@ -340,7 +357,7 @@ public final class CameraSettings {
     }
 
     public void reset() {
-        selected = CameraControl.APERTURE;
+        selected = CameraControl.EXPOSURE_MODE;
         isoIndex = 1;
         shutterIndex = 6;
         apertureIndex = 2;
@@ -653,6 +670,7 @@ public final class CameraSettings {
             case CAPTURE_TECHNIQUE -> captureTechnique.label();
             case FOCAL_LENGTH -> focalLength() + "mm";
             case LENS -> lens.label();
+            case FOCUS_MODE -> autoFocus ? "AF" : "MF";
             case FOCUS_DISTANCE -> (autoFocus ? "AF " : "MF ") + focusDistanceLabel();
             case FOCUS_POINT -> focusPointLabel();
             case EXPOSURE_COMPENSATION -> signed(exposureCompensationStops());
@@ -713,6 +731,51 @@ public final class CameraSettings {
         copy.captureExposureBiasStops = captureExposureBiasStops;
         copy.preset = preset;
         return copy;
+    }
+
+    public void applyFrom(CameraSettings source) {
+        if (source == null) {
+            return;
+        }
+        CameraSettings copy = source.copy();
+        selected = copy.selected == null ? CameraControl.EXPOSURE_MODE : copy.selected;
+        isoIndex = clamp(copy.isoIndex, 0, ISO_VALUES.length - 1);
+        shutterIndex = clamp(copy.shutterIndex, 0, SHUTTER_LABELS.length - 1);
+        apertureIndex = clamp(copy.apertureIndex, 0, APERTURE_VALUES.length - 1);
+        exposureCompensation = clamp(copy.exposureCompensation, -6, 6);
+        whiteBalanceIndex = clamp(copy.whiteBalanceIndex, 0, WB_VALUES.length - 1);
+        contrast = clamp(copy.contrast, -5, 5);
+        saturation = clamp(copy.saturation, -5, 5);
+        autoFocus = copy.autoFocus;
+        flash = copy.flash;
+        burst = copy.burst;
+        astrophotography = copy.astrophotography;
+        filmProfile = copy.filmProfile == null ? FilmProfile.NEUTRAL : copy.filmProfile;
+        aspectRatio = copy.aspectRatio == null ? AspectRatio.NATIVE : copy.aspectRatio;
+        mood = copy.mood == null ? MoodPreset.NATURAL : copy.mood;
+        rollDegrees = clamp(copy.rollDegrees, -30.0, 30.0);
+        focusPointIndex = clamp(copy.focusPointIndex, 0, 8);
+        exposureMode = copy.exposureMode == null ? ExposureMode.MANUAL : copy.exposureMode;
+        meteringMode = copy.meteringMode == null ? MeteringMode.EVALUATIVE : copy.meteringMode;
+        autoIso = copy.autoIso;
+        autoIsoMaximumIndex = clamp(copy.autoIsoMaximumIndex, 1, ISO_VALUES.length - 1);
+        minimumShutterIndex = clamp(copy.minimumShutterIndex, 0, MIN_SHUTTER_LABELS.length - 1);
+        exposureBracket = copy.exposureBracket == null ? ExposureBracket.OFF : copy.exposureBracket;
+        captureTechnique = copy.captureTechnique == null ? CaptureTechnique.SINGLE : copy.captureTechnique;
+        exposureAssist = copy.exposureAssist == null ? ExposureAssist.HISTOGRAM : copy.exposureAssist;
+        lens = copy.lens == null ? LensProfile.KIT_ZOOM : copy.lens;
+        filter = copy.filter == null ? OpticalFilter.NONE : copy.filter;
+        printSize = copy.printSize == null ? PrintSize.ONE_BY_ONE : copy.printSize;
+        astroTracking = copy.astroTracking == null ? AstroTracking.OFF : copy.astroTracking;
+        astroStackMode = copy.astroStackMode == null ? AstroStackMode.DEEP_SKY : copy.astroStackMode;
+        darkFrameSubtraction = copy.darkFrameSubtraction;
+        redNightVision = copy.redNightVision;
+        intervalSequenceShots = clamp(copy.intervalSequenceShots, 0, 99);
+        intervalSequenceSeconds = Math.max(0, copy.intervalSequenceSeconds);
+        captureExposureBiasStops = clamp(copy.captureExposureBiasStops, -6.0, 6.0);
+        preset = copy.preset == null ? OpticsPreset.fromConfig(SnapshotConfig.get().defaultPreset) : copy.preset;
+        focalLength = clamp(copy.focalLength, lens.minimumFocalLength(), lens.maximumFocalLength());
+        focusDistance = clamp(copy.focusDistance, lens.minimumFocusDistance(), 256.0);
     }
 
     private double exposureStopsFor(int candidateIso, int candidateShutter, int candidateAperture) {

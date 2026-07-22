@@ -21,6 +21,10 @@ class SnapshotConfigTest {
         properties.setProperty("capture.max_long_exposure_samples", "broken");
         properties.setProperty("capture.max_bulb_seconds", "999");
         properties.setProperty("optics.default_preset", "cinematic-but-invalid");
+        properties.setProperty("optics.target_fps", "999");
+        properties.setProperty("optics.depth_temporal_stability", "-1");
+        properties.setProperty("accessibility.focus_peaking_palette", "20");
+        properties.setProperty("accessibility.hud_scale", "2");
         properties.setProperty("environment.permission_level", "-4");
 
         SnapshotConfig config = create(properties);
@@ -32,6 +36,10 @@ class SnapshotConfigTest {
         assertEquals(64, config.maxLongExposureSamples);
         assertEquals(300, config.maxBulbSeconds);
         assertEquals("ultra", config.defaultPreset);
+        assertEquals(240, config.targetFps);
+        assertEquals(0, config.depthTemporalStability);
+        assertEquals(3, config.focusPeakingPalette);
+        assertEquals(75, config.hudScale);
         assertEquals(0, config.environmentPermissionLevel);
     }
 
@@ -44,7 +52,7 @@ class SnapshotConfigTest {
             assertFalse(spec.section().isBlank());
             assertTrue(spec.max() >= spec.min());
         }
-        assertEquals(20, keys.size());
+        assertEquals(SnapshotConfig.SPECS.size(), keys.size());
     }
 
     private static SnapshotConfig create(Properties properties) throws ReflectiveOperationException {

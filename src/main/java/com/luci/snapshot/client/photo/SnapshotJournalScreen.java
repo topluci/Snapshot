@@ -60,7 +60,7 @@ public final class SnapshotJournalScreen extends Screen {
             }
         }
 
-        extractor.centeredText(font, SnapshotLighttableScreen.styled("M CAMERA ROLL  |  ESC BACK"),
+        extractor.centeredText(font, SnapshotLighttableScreen.styled("M CLOSE  |  J / ESC BACK"),
             width / 2, height - 17, 0xFF7F8B91);
         super.extractRenderState(extractor, mouseX, mouseY, partialTick);
     }
@@ -94,7 +94,11 @@ public final class SnapshotJournalScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
-        if (event.key() == InputConstants.KEY_M || event.key() == InputConstants.KEY_J) {
+        if (event.key() == InputConstants.KEY_M) {
+            minecraft.setScreenAndShow(null);
+            return true;
+        }
+        if (event.key() == InputConstants.KEY_J) {
             minecraft.setScreenAndShow(previous);
             return true;
         }
