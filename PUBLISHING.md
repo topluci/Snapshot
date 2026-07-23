@@ -1,7 +1,8 @@
 # Snapshot Publishing Checklist
 
 Snapshot is client-and-server Fabric software for Minecraft 26.2. It is Copyright (c) 2026 luci,
-All Rights Reserved/No License.
+All Rights Reserved/No License, with explicit permission for credited, unmodified inclusion in
+public or private modpacks.
 
 ## 1. Verify locally
 
@@ -47,7 +48,7 @@ Use the same checked release JAR. Do not upload the sources JAR.
 - Required dependency: Fabric API
 - Optional integrations: Mod Menu, Sodium, Iris, Image2Map
 - Java requirement: Java 25
-- License: All Rights Reserved
+- License: All Rights Reserved with permission for credited, unmodified modpack inclusion
 - Version title: `Snapshot 0.1.0 for Minecraft 26.2`
 - Changelog: use `MODRINTH_CHANGELOG.md`, keeping its claims aligned with `docs/FEATURE_STATUS.md`
 

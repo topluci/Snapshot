@@ -10,6 +10,7 @@ photo management to Minecraft 26.2.
 - Made PNG and metadata output validated and atomic, with an available-space guard.
 - Expanded entity-aware depth sampling, calibration/high-resolution smoke checks, unit tests, and
   release automation.
+- Unmodified official releases may now be included in modpacks with credit and an official link.
 
 Requires Fabric Loader 0.19.2+, Fabric API 0.152.2+26.2+, and Java 25. OpenGL is tested with Vanilla,
 Sodium, and Iris. Minecraft 26.2's built-in experimental Vulkan backend is also tested on macOS

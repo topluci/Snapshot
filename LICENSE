@@ -9,8 +9,19 @@ modify, adapt, redistribute, rehost, sublicense, sell, or create derivative
 works from Snapshot without prior written permission from luci.
 
 Official, unmodified releases may be downloaded and used for personal gameplay.
-This limited permission does not permit redistribution, inclusion in a modpack,
-publication of modified builds, or reuse of Snapshot code or assets.
+
+You may also include unmodified official Snapshot release files in public or
+private modpacks and redistribute those files solely as part of such modpacks,
+without requesting prior permission, provided that:
+
+- Snapshot is clearly credited as "Snapshot" by luci; and
+- the modpack listing links to https://modrinth.com/project/snapshotphoto when
+  the distribution platform supports project links.
+
+Using a platform's official Snapshot dependency or download is preferred but
+not required. This modpack permission does not allow modified builds,
+standalone rehosting, sale or licensing of Snapshot by itself, or reuse of
+Snapshot code or assets.
 
 Third-party materials are not covered by this notice and remain subject to their
 respective licenses. See NOTICE.md and FONT_LICENSE.md.

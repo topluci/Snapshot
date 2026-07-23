@@ -164,6 +164,8 @@ class SnapshotResourceIntegrityTest {
         String license = Files.readString(ROOT.resolve("LICENSE"), StandardCharsets.UTF_8);
         assertTrue(license.contains("Copyright (c) 2026 luci. All rights reserved."));
         assertTrue(license.contains("No open-source license is granted"));
+        assertTrue(license.contains("include unmodified official Snapshot release files in public or"));
+        assertTrue(license.contains("redistribute those files solely as part of such modpacks"));
         assertFalse(license.contains("Permission is hereby granted"));
 
         String readme = Files.readString(ROOT.resolve("README.md"), StandardCharsets.UTF_8);
@@ -172,6 +174,7 @@ class SnapshotResourceIntegrityTest {
         assertTrue(readme.contains("singleplayer-only") || readme.contains("singleplayer"));
         assertTrue(readme.contains("Copyright (c) 2026 luci"));
         assertTrue(readme.replaceAll("\\s+", " ").contains("All Rights Reserved/No License"));
+        assertTrue(readme.contains("included in public or private modpacks"));
         assertFalse(readme.contains("Snapshot is MIT licensed"));
         assertFalse(readme.contains("original assets are MIT licensed"));
 

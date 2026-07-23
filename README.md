@@ -110,7 +110,10 @@ print. It temporarily serves the local PNG through a random URL bound only to `1
   camera RAW, scientific constellation identification, or placeable multi-size photo blocks.
 
 Snapshot’s original code and assets are Copyright (c) 2026 luci and released as All Rights
-Reserved/No License. Redistribution, modpack inclusion, modified releases, and reuse require luci's prior written permission.
+Reserved/No License. Unmodified official releases may be included in public or private modpacks
+without prior permission when Snapshot is credited and the official Modrinth page is linked.
+Modified releases, standalone rehosting, and reuse of Snapshot code or assets still require luci's
+prior written permission.
 
 Its generated viewfinder glyph atlas is derived from Noto Sans JP and
 remains under the SIL Open Font License 1.1.
