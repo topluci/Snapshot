@@ -6,7 +6,11 @@ out/
 # Minecraft development instance (worlds, captures, mods, logs, and options)
 run/
 
-# Local working files
+# Local working files and generated support artifacts
+mods/
+branding/
+graphify-out/
+logs/
 tmp/
 *.log
 hs_err_pid*
