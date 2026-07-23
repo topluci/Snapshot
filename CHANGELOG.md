@@ -1,9 +1,5 @@
 # Changelog
 
-All notable user-facing changes to Snapshot are documented here.
-
-## 0.1.0+26.2 - 2026-07-23
-
 ### Camera and capture
 
 - Added five persistent camera preset slots for Landscape, Portrait, Wildlife, Astro, and Macro
@@ -32,8 +28,7 @@ All notable user-facing changes to Snapshot are documented here.
 - Added in-game calibration and high-resolution smoke scenarios alongside expanded unit and resource
   integrity tests.
 - Added pull-request builds, tag-based GitHub releases, release packaging, and SHA-256 generation.
-- Allowed unmodified official Snapshot releases in public or private modpacks with credit and an
-  official project link, without requiring prior permission.
+- Allowed unmodified official Snapshot releases in public or private modpacks with credit, without requiring prior permission.
 
 ### Compatibility notes
 

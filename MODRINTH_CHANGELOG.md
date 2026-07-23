@@ -1,5 +1,4 @@
-Snapshot 0.1.0 is the first release, bringing detailed capture controls, live optics, and safe local
-photo management to Minecraft 26.2.
+
 
 - Added five persistent full-camera preset slots.
 - Added exposure-matched Tiled 2X capture for larger still-scene images and improved panoramas.
@@ -10,7 +9,7 @@ photo management to Minecraft 26.2.
 - Made PNG and metadata output validated and atomic, with an available-space guard.
 - Expanded entity-aware depth sampling, calibration/high-resolution smoke checks, unit tests, and
   release automation.
-- Unmodified official releases may now be included in modpacks with credit and an official link.
+- Unmodified official releases may be included in modpacks with credit.
 
 Requires Fabric Loader 0.19.2+, Fabric API 0.152.2+26.2+, and Java 25. OpenGL is tested with Vanilla,
 Sodium, and Iris. Minecraft 26.2's built-in experimental Vulkan backend is also tested on macOS

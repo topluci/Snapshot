@@ -1,12 +1,7 @@
-# Gradle
 .gradle/
 build/
 out/
-
-# Minecraft development instance (worlds, captures, mods, logs, and options)
 run/
-
-# Local working files and generated support artifacts
 mods/
 branding/
 graphify-out/
@@ -15,13 +10,9 @@ tmp/
 *.log
 hs_err_pid*
 replay_pid*
-
-# IDE and operating-system metadata
 .idea/
 .vscode/
 *.iml
 .DS_Store
-
-# Compiled artifacts should be attached to releases, not committed
 *.jar
 !gradle/wrapper/gradle-wrapper.jar

@@ -4,8 +4,6 @@ Snapshot turns Minecraft into a hands-on photography sandbox. Compose through a 
 viewfinder, control exposure and focus, save local PNGs, and carry the result as a Photograph or
 locked Photo Map.
 
-Snapshot `0.1.0+26.2` targets Minecraft `26.2`.
-
 ## Requirements
 
 - Fabric Loader `0.19.2` or newer
@@ -93,11 +91,10 @@ the framebuffer, and checks its four-frame metadata. Release and Modrinth steps 
 ## Image2Map
 
 With Image2Map installed in singleplayer, Snapshot can automatically create the selected multi-map
-print. It temporarily serves the local PNG through a random URL bound only to `127.0.0.1`, then stops the bridge when Minecraft closes. Automatic handoff does not operate on remote servers; an optional helper sidecar is provided for that workflow. Tested integration version: Image2Map `0.14.0+26.2`.
+print. Tested integration version: Image2Map `0.14.0+26.2`.
 
 ## Important limits
 
-- This release targets Minecraft `26.2` only.
 - Lenses and filters are selectable simulations, not separate equipment items.
 - The tripod stabilises from inventory; it is not a placeable tripod entity.
 - The in-game Photograph uses map resolution. Full-resolution review is available from the local
